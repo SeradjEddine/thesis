@@ -1,0 +1,46 @@
+
+
+
+vec ops 
+
+| Function    | Inputs                                        | Output / Return            |
+| ----------- | --------------------------------------------- | -------------------------- |
+| `vec_add`   | `int n`, `const double *a`, `const double *b` | `double *out` (length `n`) |
+| `vec_sub`   | `int n`, `const double *a`, `const double *b` | `double *out` (length `n`) |
+| `vec_scale` | `int n`, `double s`, `const double *a`        | `double *out` (length `n`) |
+| `vec_copy`  | `int n`, `const double *src`                  | `double *dst` (length `n`) |
+| `vec_dot`   | `int n`, `const double *a`, `const double *b` | `double` (scalar)          |
+| `vec_norm`  | `int n`, `const double *a`                    | `double` (scalar)          |
+
+matrix ops
+
+
+| Function           | Inputs                                                             | Output / Return                                |
+| ------------------ | ------------------------------------------------------------------ | ---------------------------------------------- |
+| `mat_set_identity` | `int n`                                                            | `double *A` (size `n*n`, identity matrix)      |
+| `mat_transpose`    | `int r`, `int c`, `const double *A`                                | `double *AT` (size `c*r`)                      |
+| `mat_mult`         | `int rA`, `int cA`, `int cB`, `const double *A`, `const double *B` | `double *C` (size `rA*cB`)                     |
+| `mat_vec_mult`     | `int r`, `int c`, `const double *A`, `const double *v`             | `double *out` (length `r`)                     |
+| `mat_add`          | `int r`, `int c`, `const double *A`, `const double *B`             | `double *C` (size `r*c`)                       |
+| `mat_sub`          | `int r`, `int c`, `const double *A`, `const double *B`             | `double *C` (size `r*c`)                       |
+| `mat_inverse_2x2`  | `const double *A` (size 4, row-major 2×2)                          | `double *Ainv` (size 4), `int` return (status) |
+| `mat_inverse_3x3`  | `const double *A` (size 9, row-major 3×3)                          | `double *Ainv` (size 9), `int` return (status) |
+
+
+Quaternion operations
+
+| Function          | Inputs                                     | Output / Return              |
+| ----------------- | ------------------------------------------ | ---------------------------- |
+| `quat_normalize`  | `double q[4]`                              | Normalized `q[4]` (in-place) |
+| `quat_mul`        | `const double q1[4]`, `const double q2[4]` | `double out[4]`              |
+| `quat_rotate_vec` | `const double q[4]`, `const double v[3]`   | `double out[3]`              |
+| `quat_from_omega` | `const double omega[3]`, `double dt`       | `double q_delta[4]`          |
+
+
+EKF utilities
+
+| Function               | Inputs                                               | Output / Return                               |
+| ---------------------- | ---------------------------------------------------- | --------------------------------------------- |
+| `skew_symmetric`       | `const double v[3]`                                  | `double S[9]` (3×3 skew-symmetric, row-major) |
+| `mahalanobis_distance` | `const double *innov`, `const double *Sinv`, `int n` | `double` (scalar distance)                    |
+

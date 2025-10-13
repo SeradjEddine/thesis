@@ -49,7 +49,7 @@ def parse_timestamp_ns(ts: str) -> int:
 
     return base_epoch * 1_000_000_000 + ns
 
-def prepare_kitti_sequence(seq_dir, output_csv="oxts_clean.csv"):
+def prepare_kitti_sequence(seq_dir, output_csv="oxts.csv"):
     """Convert OXTS txt files + timestamps into a clean CSV with relative nanosecond time."""
 
     # Load timestamps

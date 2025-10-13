@@ -1,44 +1,47 @@
 import pandas as pd
 import matplotlib.pyplot as plt
-import numpy as np
 
-# Load CSV
-df = pd.read_csv("imu_prop.csv")
+# --- Load logs ---
+state_df = pd.read_csv("imu_prop.csv")
+gps_df = pd.read_csv("gps_updates.csv")
 
-# Position trajectory (x vs y)
-plt.figure()
-plt.plot(df['px'], df['py'])
-plt.xlabel("x [m]")
-plt.ylabel("y [m]")
-plt.title("Estimated Trajectory (IMU only)")
-plt.axis('equal')
-plt.grid()
+print(f"Loaded {len(state_df)} state samples, {len(gps_df)} GPS updates")
 
-# Velocity magnitude
-vel_mag = np.sqrt(df['vx']**2 + df['vy']**2 + df['vz']**2)
-plt.figure()
-plt.plot(df['t'], vel_mag)
-plt.xlabel("time [s]")
-plt.ylabel("Speed [m/s]")
-plt.title("Velocity magnitude over time")
-plt.grid()
+# --- Trajectory (XY ENU) ---
+plt.figure(figsize=(8,6))
+plt.plot(state_df["px"], state_df["py"], label="EKF trajectory", linewidth=2)
 
-# Quaternion norm check
-quat_norm = np.sqrt(df['qw']**2 + df['qx']**2 + df['qy']**2 + df['qz']**2)
-plt.figure()
-plt.plot(df['t'], quat_norm)
-plt.xlabel("time [s]")
-plt.ylabel("||q||")
-plt.title("Quaternion Norm (should stay ~1)")
-plt.grid()
+# Separate accepted/rejected GPS updates
+accepted = gps_df[gps_df["accepted_pos"] == 1]
+rejected = gps_df[gps_df["accepted_pos"] == 0]
 
-# Trace of covariance
-plt.figure()
-plt.plot(df['t'], df['traceP'])
-plt.xlabel("time [s]")
-plt.ylabel("Trace(P)")
-plt.title("Covariance growth (uncertainty)")
-plt.grid()
+plt.scatter(accepted["zx"], accepted["zy"], c="green", s=20, label="GPS accepted")
+plt.scatter(rejected["zx"], rejected["zy"], c="red", s=20, label="GPS rejected")
+
+plt.xlabel("East (m)")
+plt.ylabel("North (m)")
+plt.title("Trajectory in ENU frame")
+plt.legend()
+plt.axis("equal")
+plt.grid(True)
+
+# --- Mahalanobis distances ---
+plt.figure(figsize=(10,4))
+plt.plot(gps_df["t"], gps_df["mahalanobis_pos"], label="Position Mahalanobis")
+plt.axhline(16.27, color="r", linestyle="--", label="3σ threshold")
+plt.xlabel("Time (s)")
+plt.ylabel("d² value")
+plt.title("GPS Position Mahalanobis Distance")
+plt.legend()
+plt.grid(True)
+
+plt.figure(figsize=(10,4))
+plt.plot(gps_df["t"], gps_df["mahalanobis_vel"], label="Velocity Mahalanobis")
+plt.axhline(16.27, color="r", linestyle="--", label="3σ threshold")
+plt.xlabel("Time (s)")
+plt.ylabel("d² value")
+plt.title("GPS Velocity Mahalanobis Distance")
+plt.legend()
+plt.grid(True)
 
 plt.show()
-

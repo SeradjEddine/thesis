@@ -5,6 +5,35 @@
 
 static FILE *g_state_f = NULL;
 static FILE *g_gps_f = NULL;
+static FILE *g_fuzzy_f = NULL;
+
+
+int open_fuzzy_log(const char *filename)
+{
+    g_fuzzy_f = fopen(filename, "w");
+    if (!g_fuzzy_f)
+        return -1;
+    fprintf(g_fuzzy_f, "t,scale_R_gps,scale_Q,scale_gate\n");
+    return 0;
+}
+
+void close_fuzzy_log(void)
+{
+    if (g_fuzzy_f)
+    {
+        fclose(g_fuzzy_f);
+        g_fuzzy_f = NULL;
+    }
+}
+
+void log_fuzzy(double t, double scale_R_gps, double scale_Q, double scale_gate)
+{
+    if (!g_fuzzy_f)
+        return;
+    fprintf(g_fuzzy_f, "%.6f,%.6f,%.6f,%.6f\n",
+            t, scale_R_gps, scale_Q, scale_gate);
+    fflush(g_fuzzy_f);
+}
 
 int open_state_log(const char *filename)
 {

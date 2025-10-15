@@ -3,6 +3,10 @@
 #include <stdio.h>
 #include "ekf.h"
 
+int open_fuzzy_log(const char *filename);
+void log_fuzzy(double t, double scale_R_gps, double scale_Q, double scale_gate);
+void close_fuzzy_log(void);
+
 int open_state_log(const char *filename);
 void close_state_log(void);
 void log_state(const struct ekf_state *x, const double P[P_DIM]);

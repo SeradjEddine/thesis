@@ -100,7 +100,7 @@ static int mat_inverse_3x3_local(const double *A, double *Ainv)
    Commonly we choose 3-sigma-equivalent; we'll expose this as a const.
 */
 static const double MAHALANOBIS_THRESH_POS = 16.27; // for 3 DOF
-static const double MAHALANOBIS_THRESH_VEL = 16.27; // same for velocity
+static const double MAHALANOBIS_THRESH_VEL = 20.27; // same for velocity
 
 /* ekf_update_gps:
    We perform sequential updates:

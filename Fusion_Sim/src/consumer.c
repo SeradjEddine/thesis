@@ -1,7 +1,10 @@
+#include "../include/fuzzy_supervisor.h"
 #include "../include/consumer.h"
 #include "../include/ekf.h"
 #include "../include/logger.h"
 #include "../include/sensors.h"
+#include "../src/mathlib/mathlib.h"
+
 #include <stdio.h>
 #include <unistd.h>
 #include <string.h>
@@ -25,10 +28,24 @@ void *consumer_thread(void *arg)
 
     open_state_log("proccessed_csv/imu_prop.csv");
     open_gps_log("proccessed_csv/gps_updates.csv");
+    open_fuzzy_log("proccessed_csv/fuzzy_updates.csv");
 
+    fuzzy_params_t fparams = 
+    {
+        .min_scale_R = 0.6,
+        .max_scale_R = 3.0,
+        .min_scale_Q = 0.7,
+        .max_scale_Q = 2.0,
+        .min_scale_gate = 0.85,
+        .max_scale_gate = 1.5,
+        .smoothing_alpha = 0.85
+    };
+    fuzzy_init(&fparams);
+
+    double maha_pos = 0.0, maha_vel = 0.0;
     double last_time = state.t;
-
     size_t processed = 0;
+
     while (1)
     {
         /* Prefer IMU pops: process available IMU samples quickly */
@@ -84,12 +101,64 @@ void *consumer_thread(void *arg)
             double Rpos[9] = { GPS_POS_STD*GPS_POS_STD, 0,0, 0, GPS_POS_STD*GPS_POS_STD, 0, 0,0, GPS_POS_STD*GPS_POS_STD};
             double Rvel[9] = { GPS_VEL_STD*GPS_VEL_STD, 0,0, 0, GPS_VEL_STD*GPS_VEL_STD, 0, 0,0, GPS_VEL_STD*GPS_VEL_STD};
 
+/////////////////////////////////////////////////////////////
+
+            /* === NEW: Run fuzzy supervisor === */
+            fuzzy_inputs_t fin;
+            fin.mahalanobis_pos = maha_pos;   // from previous update
+            fin.mahalanobis_vel = maha_vel;
+            fin.cov_trace = P[0] + P[7] + P[14];  // trace of P (assuming row-major 3×3 block for pos)
+            fin.accel_norm = 0.0; // placeholder, can fill from last IMU magnitude later
+
+            fuzzy_outputs_t fout;
+            fuzzy_update(&fin, &fout);
+
+            /* Scale R matrices according to fuzzy output */
+            double Rpos_scaled[9], Rvel_scaled[9];
+            mat_scale(3, 3, fout.scale_R_gps, Rpos, Rpos_scaled);
+            mat_scale(3, 3, fout.scale_R_gps, Rvel, Rvel_scaled);
+
+            /* === Use scaled R in EKF === */
+            int accepted_pos = 0, accepted_vel = 0;
+            ekf_update_gps(&state, P,
+                           pos_enu, vel_enu,
+                           Rpos_scaled, Rvel_scaled,
+                           &maha_pos, &accepted_pos,
+                           &maha_vel, &accepted_vel);
+
+
+            /* === Logging === */
+            double innov_pos[3] = {
+                pos_enu[0] - state.p[0],
+                pos_enu[1] - state.p[1],
+                pos_enu[2] - state.p[2]
+            };
+            double innov_vel[3] = {
+                vel_enu[0] - state.v[0],
+                vel_enu[1] - state.v[1],
+                vel_enu[2] - state.v[2]
+            };
+
+            log_gps_update(g.t, pos_enu, innov_pos,
+                           maha_pos, accepted_pos,
+                           vel_enu, innov_vel,
+                           maha_vel, accepted_vel);
+
+            /* optional: log fuzzy scalers */
+            log_fuzzy(g.t, fout.scale_R_gps, fout.scale_Q, fout.scale_gate);
+
+            continue;
+        }
+
+/* // from befor the fuzzy
+
             double maha_pos = 0.0; int accepted_pos = 0;
             double maha_vel = 0.0; int accepted_vel = 0;
 
+
             ekf_update_gps(&state, P, pos_enu, vel_enu, Rpos, Rvel, &maha_pos, &accepted_pos, &maha_vel, &accepted_vel);
 
-            /* Compute innovation vectors for logging: innovation = z - h(x) (we computed them inside ekf_update_gps earlier; recompute here) */
+            // Compute innovation vectors for logging: innovation = z - h(x) (we computed them inside ekf_update_gps earlier; recompute here) //
             double innov_pos[3] = { pos_enu[0] - state.p[0], pos_enu[1] - state.p[1], pos_enu[2] - state.p[2] };
             double innov_vel[3] = { vel_enu[0] - state.v[0], vel_enu[1] - state.v[1], vel_enu[2] - state.v[2] };
 
@@ -97,11 +166,14 @@ void *consumer_thread(void *arg)
 
             continue;
         }
+*/
 
         /* If nothing available, check termination condition */
-        if (*(cargs->producers_done) >= 2 && rb_is_empty(cargs->imu_rb) && rb_is_empty(cargs->gps_rb)) {
+        if (*(cargs->producers_done) >= 2   &&
+                rb_is_empty(cargs->imu_rb)  &&
+                rb_is_empty(cargs->gps_rb))
             break;
-        }
+
         usleep(1000);
     }
 

@@ -9,7 +9,7 @@ static const fuzzy_params_t default_params = {
     .max_scale_Q = 2.0,
     .min_scale_gate = 0.8,
     .max_scale_gate = 1.5,
-    .smoothing_alpha = 0.55
+    .smoothing_alpha = 0.95
 };
 
 /* Internal state */
@@ -75,7 +75,7 @@ void fuzzy_init(const fuzzy_params_t *params)
 }
 
 /* Map linguistic label -> numeric scale (per output). */
-/* We use three levels: decrease / normal / increase. */
+/* three levels: decrease / normal / increase. */
 static void map_R_scale(double dec_strength, double nor_strength, double inc_strength,
                         double *out_scale)
 {
@@ -135,7 +135,7 @@ void fuzzy_update(const fuzzy_inputs_t *in, fuzzy_outputs_t *out)
     const double ct_med_a = 5.0, ct_med_b = 15.0, ct_med_c = 30.0;
     const double ct_high_a = 15.0, ct_high_b = 60.0;
 
-    /* Accel norm (m/s^2) - motion energy */
+    /* Accel norm (m/s^2)  */
     const double acc_low_b = 1.2;
     const double acc_high_a = 1.5, acc_high_b = 4.0;
 
@@ -156,7 +156,7 @@ void fuzzy_update(const fuzzy_inputs_t *in, fuzzy_outputs_t *out)
     double acc_high = mf_right(in->accel_norm, acc_high_a, acc_high_b);
 
     /* RULES (examples). Each rule produces strengths for outputs. */
-    /* We'll compute contributions for each linguistic label (dec/norm/inc) per output. */
+    /* compute contributions for each linguistic label (dec/norm/inc) per output. */
     double R_dec = 0.0, R_norm = 0.0, R_inc = 0.0;
     double Q_dec = 0.0, Q_norm = 0.0, Q_inc = 0.0;
     double G_dec = 0.0, G_norm = 0.0, G_inc = 0.0;
@@ -237,7 +237,7 @@ void fuzzy_update(const fuzzy_inputs_t *in, fuzzy_outputs_t *out)
     last_out = *out;
 }
 
-/* optional accessor */
+/* optional accessor for debugging*/
 void fuzzy_get_last_outputs(fuzzy_outputs_t *out)
 {
     *out = last_out;

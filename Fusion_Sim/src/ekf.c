@@ -68,9 +68,7 @@ void latlon_to_enu(double lat_deg, double lon_deg, double alt_m, double enu_out[
     mat_vec_mult(3, 3, enu_rot, d, enu_out);
 }
 
-/* ---- small 3x3 inverse helper (analytic) ----
-   Inverse of 3x3 via adjoint/determinant; returns 0 on success, non-zero if singular.
-*/
+
 static int mat_inverse_3x3_local(const double *A, double *Ainv)
 {
     double a = A[0], b = A[1], c = A[2];
@@ -96,11 +94,9 @@ static int mat_inverse_3x3_local(const double *A, double *Ainv)
     return 0;
 }
 
-/* Mahalanobis gating threshold for 3 DoF at 0.997 confidence ~ 16.27
-   Commonly we choose 3-sigma-equivalent; we'll expose this as a const.
-*/
+/* Mahalanobis gating threshold for 3 DoF at 0.997 confidence ~ 16.27 */
 static const double MAHALANOBIS_THRESH_POS = 16.27; // for 3 DOF
-static const double MAHALANOBIS_THRESH_VEL = 20.27; // same for velocity
+static const double MAHALANOBIS_THRESH_VEL = 16.27; // same for velocity
 
 /* ekf_update_gps:
    We perform sequential updates:

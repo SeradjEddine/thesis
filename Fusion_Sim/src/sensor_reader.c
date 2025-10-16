@@ -8,7 +8,7 @@
 
 /**
  * Reads OXTS CSV (with relative time as the last column) and fills IMU and GPS arrays.
- * Robust parsing using comma-splitting to handle all numeric columns.
+ * parsing using comma-splitting to handle all numeric columns.
  *
  * @param filename   Path to CSV file
  * @param imus       Output array for IMU samples
@@ -17,6 +17,7 @@
  * @param max_gps    Capacity of GPS array
  * @return           Number of samples successfully read (min of IMU/GPS count)
  */
+
 int read_oxts_csv(const char *filename,
                   struct imu_sample *imus, int max_imus,
                   struct gps_sample *gps, int max_gps)
@@ -47,11 +48,11 @@ int read_oxts_csv(const char *filename,
         double values[26]; // 23 original + 2 skipped + 1 rel_time
         int i = 0;
 
-        while ((token = strtok_r(rest, ",", &rest)) && i < 26) {
+        while ((token = strtok_r(rest, ",", &rest)) && i < 26)
             values[i++] = atof(token);
-        }
 
-        if (i < 24) { // must have at least 23 sensor fields + rel_time
+        if (i < 24) // must have at least 23 sensor fields (KITTI format) + rel_time
+        { 
             fprintf(stderr, "Parse error: expected ≥24 fields, got %d\n", i);
             continue;
         }

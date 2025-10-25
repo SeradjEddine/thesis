@@ -18,15 +18,17 @@ static fuzzy_outputs_t last_out = {1.0, 1.0, 1.0};
 
 /* --- Simple triangular/trapezoidal membership helpers --- */
 /* returns value in [0,1] */
+/*
 static double mf_tri(double x, double a, double b, double c)
 {
     if (x <= a) return 0.0;
     if (x >= c) return 0.0;
     if (x == b) return 1.0;
     if (x < b) return (x - a) / (b - a);
-    /* x > b */
+    // x > b 
     return (c - x) / (c - b);
 }
+*/
 
 /* left-shoulder: 1 up to b, then falls to 0 at c */
 static double mf_left(double x, double b, double c)
@@ -127,32 +129,39 @@ void fuzzy_update(const fuzzy_inputs_t *in, fuzzy_outputs_t *out)
     /* Input membership breakpoints - tuned conservative defaults */
     /* Mahalanobis (3 DOF threshold ~16.27) */
     const double m_low_b = 3.0;    /* below this: very good */
-    const double m_med_a = 3.0, m_med_b = 8.0, m_med_c = 14.0;
-    const double m_high_a = 8.0, m_high_b = 25.0;
+    //const double m_med_a = 3.0;
+    const double m_med_b = 8.0;
+    //const doublem_med_c = 14.0;
+    const double m_high_a = 8.0;
+    const double m_high_b = 25.0;
 
     /* Covariance trace (depends on your state scaling) - conservative numbers */
-    const double ct_low_b = 5.0;
-    const double ct_med_a = 5.0, ct_med_b = 15.0, ct_med_c = 30.0;
-    const double ct_high_a = 15.0, ct_high_b = 60.0;
+
+    //const double ct_low_b = 5.0;
+    //const double ct_med_a = 5.0;
+    //const double ct_med_b = 15.0;
+    const double ct_high_a = 15.0;
+    const double ct_high_b = 60.0;
+    //const double ct_med_c = 30.0;
 
     /* Accel norm (m/s^2)  */
-    const double acc_low_b = 1.2;
+    //const double acc_low_b = 1.2;
     const double acc_high_a = 1.5, acc_high_b = 4.0;
 
     /* Evaluate memberships (0..1) */
     double mpos_low = mf_left(in->mahalanobis_pos, m_low_b, m_med_b);
-    double mpos_med = mf_tri(in->mahalanobis_pos, m_med_a, m_med_b, m_med_c);
+    //double mpos_med = mf_tri(in->mahalanobis_pos, m_med_a, m_med_b, m_med_c);
     double mpos_high = mf_right(in->mahalanobis_pos, m_high_a, m_high_b);
 
     double mvel_low = mf_left(in->mahalanobis_vel, m_low_b, m_med_b);
-    double mvel_med = mf_tri(in->mahalanobis_vel, m_med_a, m_med_b, m_med_c);
+    //double mvel_med = mf_tri(in->mahalanobis_vel, m_med_a, m_med_b, m_med_c);
     double mvel_high = mf_right(in->mahalanobis_vel, m_high_a, m_high_b);
 
-    double ct_low = mf_left(in->cov_trace, ct_low_b, ct_med_b);
-    double ct_med = mf_tri(in->cov_trace, ct_med_a, ct_med_b, ct_med_c);
+    //double ct_low = mf_left(in->cov_trace, ct_low_b, ct_med_b);
+    //double ct_med = mf_tri(in->cov_trace, ct_med_a, ct_med_b, ct_med_c);
     double ct_high = mf_right(in->cov_trace, ct_high_a, ct_high_b);
 
-    double acc_low = mf_left(in->accel_norm, acc_low_b, acc_high_b);
+    //double acc_low = mf_left(in->accel_norm, acc_low_b, acc_high_b);
     double acc_high = mf_right(in->accel_norm, acc_high_a, acc_high_b);
 
     /* RULES (examples). Each rule produces strengths for outputs. */

@@ -24,7 +24,7 @@ int main(void)
 
     /* ---- 1. Load combined dataset ---- */
     int imu_count = 0, gps_count = 0;
-    int n = read_oxts_csv("/home/seradj/Documents/Thesis/Current/Fusion_Sim/Data/oxts_csv/oxts.csv", imus, MAX_IMU, gpss, MAX_GPS);
+    int n = read_oxts_csv("../Data/oxts_csv/oxts.csv", imus, MAX_IMU, gpss, MAX_GPS);
     if (n < 0) {
         fprintf(stderr, "Error: failed to load OXTS data file.\n");
         return 1;
@@ -79,6 +79,7 @@ int main(void)
     pthread_create(&gps_thread, NULL, producer_thread, &gps_args);
     pthread_create(&cons_thread, NULL, consumer_thread, &cons_args);
 
+    printf ("waiting here\n");
     /* ---- 7. Wait ---- */
     pthread_join(imu_thread, NULL);
     *(cons_args.producers_done) += 1;

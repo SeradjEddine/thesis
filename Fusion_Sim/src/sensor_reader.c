@@ -48,8 +48,12 @@ int read_oxts_csv(const char *filename,
         double values[26]; // 23 original + 2 skipped + 1 rel_time
         int i = 0;
 
-        while ((token = strtok_r(rest, ",", &rest)) && i < 26)
+        token = strtok(rest, ",");
+        while (token && i < 26)
+        {
             values[i++] = atof(token);
+            token = strtok(NULL, ",");
+        }
 
         if (i < 24) // must have at least 23 sensor fields (KITTI format) + rel_time
         { 
@@ -57,30 +61,30 @@ int read_oxts_csv(const char *filename,
             continue;
         }
 
-        // Map columns to variables
+        // Map columns to variables the commented are unused
         double lat  = values[0];
         double lon  = values[1];
         double alt  = values[2];
-        double roll = values[3];
-        double pitch= values[4];
-        double yaw  = values[5];
+        //double roll = values[3];
+        //double pitch= values[4];
+        //double yaw  = values[5];
         double vn   = values[6];
         double ve   = values[7];
-        double vf   = values[8];
-        double vl   = values[9];
+        //double vf   = values[8];
+        //double vl   = values[9];
         double vu   = values[10];
         double ax   = values[11];
         double ay   = values[12];
         double az   = values[13];
-        double af   = values[14];
-        double al   = values[15];
-        double au   = values[16];
+        //double af   = values[14];
+        //double al   = values[15];
+        //double au   = values[16];
         double wx   = values[17];
         double wy   = values[18];
         double wz   = values[19];
-        double wf   = values[20];
-        double wl   = values[21];
-        double wu   = values[22];
+        //double wf   = values[20];
+        //double wl   = values[21];
+        //double wu   = values[22];
         double rel_time = values[i-1]; // last column
 
         // Store GPS sample

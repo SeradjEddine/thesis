@@ -1,30 +1,38 @@
-# Compiler and flags
-CC      = gcc
-CFLAGS  = -Wall -Wextra -O2 -I.
-AR      = ar
-ARFLAGS = rcs
 
-# Source and object files
-SRC = vec.c mat.c quat.c ekf_utils.c
-OBJ = $(SRC:.c=.o)
+# ---- Compiler and tools --------------------------------------------------- #
+CC      := gcc
+CFLAGS  := -Wall -Wextra -O2 -I.
+AR      := ar
+ARFLAGS := rcs
 
-# Output static library
-LIB = libmathlib.a
+# ---- Source structure ----------------------------------------------------- #
+SRC := vec.c mat.c quat.c ekf_utils.c
+OBJ := $(SRC:.c=.o)
+LIB := mathlib.a
 
-# Default target
+# ---- Default target ------------------------------------------------------- #
 all: $(LIB)
 
-# Build the static library from object files
+# ---- Build static library ------------------------------------------------- #
 $(LIB): $(OBJ)
+	@echo "📚 Archiving $@..."
 	$(AR) $(ARFLAGS) $@ $^
 
-# Compile .c to .o
+# ---- Compile objects ------------------------------------------------------ #
 %.o: %.c mathlib.h
+	@echo "🧱 Compiling $<..."
 	$(CC) $(CFLAGS) -c $< -o $@
 
-# Clean build artifacts
+# ---- Cleaning rules ------------------------------------------------------- #
 clean:
-	rm -f $(OBJ) $(LIB)
+	@echo "🧹 Cleaning object files..."
+	@rm -f $(OBJ)
 
-.PHONY: all clean
+fclean: clean
+	@echo "🗑️  Removing static library..."
+	@rm -f $(LIB)
+
+re: fclean all
+
+.PHONY: all clean fclean re
 

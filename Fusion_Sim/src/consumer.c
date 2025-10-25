@@ -14,6 +14,9 @@
 static const double GPS_POS_STD = 1.0; // meters
 static const double GPS_VEL_STD = 0.2; // m/s
 
+unsigned int interval_ms = 10;
+struct timespec ts;
+
 void *consumer_thread(void *arg)
 {
     struct consumer_args *cargs = (struct consumer_args *)arg;
@@ -29,7 +32,7 @@ void *consumer_thread(void *arg)
     /* Wait for first IMU sample */
     struct imu_sample first_imu;
     while (rb_is_empty(cargs->imu_rb))
-        usleep(1000);
+        usleep(1);
     rb_peek(cargs->imu_rb, &first_imu);
     ekf_init(&state, P, first_imu.t);
 
@@ -161,31 +164,13 @@ void *consumer_thread(void *arg)
             continue;
         }
 
-/* // from before  adding the fuzzy
-
-            double maha_pos = 0.0; int accepted_pos = 0;
-            double maha_vel = 0.0; int accepted_vel = 0;
-
-
-            ekf_update_gps(&state, P, pos_enu, vel_enu, Rpos, Rvel, &maha_pos, &accepted_pos, &maha_vel, &accepted_vel);
-
-            // Compute innovation vectors for logging: innovation = z - h(x) (we computed them inside ekf_update_gps earlier; recompute here) //
-            double innov_pos[3] = { pos_enu[0] - state.p[0], pos_enu[1] - state.p[1], pos_enu[2] - state.p[2] };
-            double innov_vel[3] = { vel_enu[0] - state.v[0], vel_enu[1] - state.v[1], vel_enu[2] - state.v[2] };
-
-            log_gps_update(g.t, pos_enu, innov_pos, maha_pos, accepted_pos, vel_enu, innov_vel, maha_vel, accepted_vel);
-
-            continue;
-        }
-*/
-
         /* If nothing available, check termination condition */
         if (*(cargs->producers_done) >= 2   &&
                 rb_is_empty(cargs->imu_rb)  &&
                 rb_is_empty(cargs->gps_rb))
             break;
 
-        usleep(1000);
+        usleep(1);
     }
 
     close_state_log();

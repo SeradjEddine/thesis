@@ -1,8 +1,7 @@
 #include "../include/ringbuffer.h"
-#include <string.h>  // for memcpy
+#include <string.h>
 
-void rb_init(struct ringbuffer *rb, void *storage,
-             size_t capacity, size_t elem_size)
+void rb_init(struct ringbuffer *rb, void *storage, size_t capacity, size_t elem_size)
 {
     rb->buffer = (uint8_t *)storage;
     rb->capacity = capacity;
@@ -12,14 +11,15 @@ void rb_init(struct ringbuffer *rb, void *storage,
 
 void rb_reset(struct ringbuffer *rb)
 {
-    rb->head = rb->tail = rb->count = 0;
+    rb->head = 0;
+    rb->tail = 0;
+    rb->count = 0;
 }
 
 int rb_push(struct ringbuffer *rb, const void *elem)
 {
-    if (rb->count == rb->capacity) {
+    if (rb->count == rb->capacity)
         return -1; // full
-    }
 
     memcpy(&rb->buffer[rb->head * rb->elem_size], elem, rb->elem_size);
     rb->head = (rb->head + 1) % rb->capacity;
@@ -29,9 +29,8 @@ int rb_push(struct ringbuffer *rb, const void *elem)
 
 int rb_pop(struct ringbuffer *rb, void *elem)
 {
-    if (rb->count == 0) {
+    if (rb->count == 0)
         return -1; // empty
-    }
 
     memcpy(elem, &rb->buffer[rb->tail * rb->elem_size], rb->elem_size);
     rb->tail = (rb->tail + 1) % rb->capacity;
@@ -41,9 +40,8 @@ int rb_pop(struct ringbuffer *rb, void *elem)
 
 int rb_peek(const struct ringbuffer *rb, void *elem)
 {
-    if (rb->count == 0) {
+    if (rb->count == 0)
         return -1; // empty
-    }
 
     memcpy(elem, &rb->buffer[rb->tail * rb->elem_size], rb->elem_size);
     return 0;
@@ -56,11 +54,11 @@ int rb_is_empty(const struct ringbuffer *rb)
 
 int rb_is_full(const struct ringbuffer *rb)
 {
-    return rb->count == rb->capacity;
+    return (rb->count == rb->capacity);
 }
 
 size_t rb_size(const struct ringbuffer *rb)
 {
-    return rb->count;
+    return (rb->count);
 }
 

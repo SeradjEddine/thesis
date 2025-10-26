@@ -1,0 +1,5 @@
+display the gps velocity graph too. 
+understand the mehalobosis thingy. 
+figure out how to get it to be under the threshold all the time and what params to change. 
+figure out what the hell is the fuzzy doing and what is it changing 
+investigate the unsed variables in the fuzzy script ( maybe they were meant to be used)

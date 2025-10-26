@@ -2,19 +2,17 @@
 #include <stdio.h>
 #include <math.h>
 
-
-static FILE *g_state_f = NULL;
-static FILE *g_gps_f = NULL;
-static FILE *g_fuzzy_f = NULL;
-
+static FILE *g_state_f  = NULL;
+static FILE *g_gps_f    = NULL;
+static FILE *g_fuzzy_f  = NULL;
 
 int open_fuzzy_log(const char *filename)
 {
     g_fuzzy_f = fopen(filename, "w");
     if (!g_fuzzy_f)
-        return -1;
+        return (-1);
     fprintf(g_fuzzy_f, "t,scale_R_gps,scale_Q,scale_gate\n");
-    return 0;
+    return (0);
 }
 
 void close_fuzzy_log(void)
@@ -30,8 +28,7 @@ void log_fuzzy(double t, double scale_R_gps, double scale_Q, double scale_gate)
 {
     if (!g_fuzzy_f)
         return;
-    fprintf(g_fuzzy_f, "%.6f,%.6f,%.6f,%.6f\n",
-            t, scale_R_gps, scale_Q, scale_gate);
+    fprintf(g_fuzzy_f, "%.6f,%.6f,%.6f,%.6f\n", t, scale_R_gps, scale_Q, scale_gate);
     fflush(g_fuzzy_f);
 }
 
@@ -39,9 +36,9 @@ int open_state_log(const char *filename)
 {
     g_state_f = fopen(filename, "w");
     if (!g_state_f)
-        return -1;
+        return (-1);
     fprintf(g_state_f, "t,px,py,pz,vx,vy,vz,qw,qx,qy,qz,traceP\n");
-    return 0;
+    return (0);
 }
 
 void close_state_log(void)
@@ -72,16 +69,16 @@ void log_state(const struct ekf_state *x, const double P[P_DIM])
     fflush(g_state_f);
 }
 
-/* GPS log */
+// GPS log
 
 int open_gps_log(const char *filename)
 {
     g_gps_f = fopen(filename, "w");
     if (!g_gps_f)
-        return -1;
+        return (-1);
     fprintf(g_gps_f, "t,zx,zy,zz,innov_x,innov_y,innov_z,mahalanobis_pos,accepted_pos,");
     fprintf(g_gps_f, "vx,vy,vz,innov_vx,innov_vy,innov_vz,mahalanobis_vel,accepted_vel\n");
-    return 0;
+    return (0);
 }
 
 void close_gps_log(void)
@@ -102,14 +99,17 @@ void log_gps_update
 {
     if (!g_gps_f)
         return;
+
     fprintf(g_gps_f, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%d,",
             t,
             zpos[0], zpos[1], zpos[2],
             innov_pos[0], innov_pos[1], innov_pos[2],
             mahalanobis_pos, accepted_pos);
+
     fprintf(g_gps_f, "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%d\n",
             zvel[0], zvel[1], zvel[2],
             innov_vel[0], innov_vel[1], innov_vel[2],
             mahalanobis_vel, accepted_vel);
+
     fflush(g_gps_f);
 }

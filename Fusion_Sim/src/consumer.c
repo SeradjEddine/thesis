@@ -10,7 +10,7 @@
 #include <string.h>
 #include <time.h>
 
-/* Default GPS measurement noise (standard deviation) */
+// Default GPS measurement noise (standard deviation)
 static const double GPS_POS_STD = 1.0; // meters
 static const double GPS_VEL_STD = 0.2; // m/s
 
@@ -29,10 +29,11 @@ void *consumer_thread(void *arg)
     double dt;
     size_t processed;
 
-    /* Wait for first IMU sample */
+    // Wait for first IMU sample
     struct imu_sample first_imu;
     while (rb_is_empty(cargs->imu_rb))
         usleep(1);
+
     rb_peek(cargs->imu_rb, &first_imu);
     ekf_init(&state, P, first_imu.t);
 
@@ -50,16 +51,15 @@ void *consumer_thread(void *arg)
         .max_scale_gate = 1.5,
         .smoothing_alpha = 0.85
     };
+
     fuzzy_init(&fparams);
-
-
     last_time = state.t;
     processed = 0;
 
     while (1)
     {
-        /* Prefer IMU pops: process available IMU samples quickly */
         struct imu_sample imu;
+
         if (rb_pop(cargs->imu_rb, &imu) == 0)
         {
             dt = imu.t - last_time;
@@ -72,16 +72,13 @@ void *consumer_thread(void *arg)
             continue; // go back to pop more IMU
         }
 
-        /* If no IMU, check GPS buffer */
         struct gps_sample g;
         if (rb_pop(cargs->gps_rb, &g) == 0) 
         {
-            /* Before applying GPS update, propagate IMU up to gps.t (if available) */
-            struct imu_sample imu2;
+            struct imu_sample imu2; // Before GPS update, propagate IMU up to gps.t (if available)
             while (!rb_is_empty(cargs->imu_rb))
             {
-                /* peek to see next imu timestamp */
-                rb_peek(cargs->imu_rb, &imu2);
+                rb_peek(cargs->imu_rb, &imu2); // peek to see next imu timestamp
                 if (imu2.t <= g.t)
                 {
                     rb_pop(cargs->imu_rb, &imu2);
@@ -95,17 +92,15 @@ void *consumer_thread(void *arg)
                     break;
             }
 
-            /* Convert GPS lat/lon/alt -> ENU using ref (assumed initialized) */
-            double pos_enu[3];
+            double pos_enu[3]; // Convert GPS lat/lon/alt -> ENU using ref (assumed initialized)
             latlon_to_enu(g.lat, g.lon, g.alt, pos_enu);
 
-            /* Convert NED velocities (vn,ve,vu) to ENU */
-            double vel_enu[3];
+            double vel_enu[3];             // Convert NED velocities (vn,ve,vu) to ENU
             vel_enu[0] = g.ve; // east -> x
             vel_enu[1] = g.vn; // north -> y
             vel_enu[2] = g.vu; // up -> z
 
-            /* Build Rpos and Rvel 3x3 diagonal covariances */
+            // Build Rpos and Rvel 3x3 diagonal covariances
             double Rpos[9] = {  GPS_POS_STD*GPS_POS_STD, 0, 0, 
                                 0, GPS_POS_STD*GPS_POS_STD, 0, 
                                 0,0, GPS_POS_STD*GPS_POS_STD  };
@@ -114,9 +109,7 @@ void *consumer_thread(void *arg)
                                 0, GPS_VEL_STD*GPS_VEL_STD, 0,
                                 0,0, GPS_VEL_STD*GPS_VEL_STD  };
 
-/////////////////////////////////////////////////////////////
-
-            /* fuzzy supervisor */
+            //---------- fuzzy supervisor -------------------//
             fuzzy_inputs_t fin;
             fin.mahalanobis_pos = maha_pos;   // from previous update
             fin.mahalanobis_vel = maha_vel;
@@ -126,22 +119,17 @@ void *consumer_thread(void *arg)
             fuzzy_outputs_t fout;
             fuzzy_update(&fin, &fout);
 
-            /* Scale R matrices according to fuzzy output */
-            double Rpos_scaled[9], Rvel_scaled[9];
+            double Rpos_scaled[9]; // Scale R matrices according to fuzzy output
+            double Rvel_scaled[9]; 
             mat_scale(3, 3, fout.scale_R_gps, Rpos, Rpos_scaled);
             mat_scale(3, 3, fout.scale_R_gps, Rvel, Rvel_scaled);
 
-            /* === Use scaled R in EKF === */
             int accepted_pos = 0;
             int accepted_vel = 0;
 
-            ekf_update_gps(&state, P, pos_enu, vel_enu,
-                           Rpos_scaled, Rvel_scaled,
-                           &maha_pos, &accepted_pos,
-                           &maha_vel, &accepted_vel);
+            ekf_update_gps(&state, P, pos_enu, vel_enu, Rpos_scaled, Rvel_scaled, // Use scaled R in EKF
+                                        &maha_pos, &accepted_pos, &maha_vel, &accepted_vel);  
 
-
-            /* === Logging === */
             double innov_pos[3] = {
                 pos_enu[0] - state.p[0],
                 pos_enu[1] - state.p[1],
@@ -153,23 +141,16 @@ void *consumer_thread(void *arg)
                 vel_enu[2] - state.v[2]
             };
 
-            log_gps_update(g.t, pos_enu, innov_pos,
-                           maha_pos, accepted_pos,
-                           vel_enu, innov_vel,
-                           maha_vel, accepted_vel);
+            log_gps_update(g.t, pos_enu, innov_pos, maha_pos, accepted_pos, 
+                                                    vel_enu, innov_vel, maha_vel, accepted_vel);
 
-            /* log fuzzy scalers */
-            log_fuzzy(g.t, fout.scale_R_gps, fout.scale_Q, fout.scale_gate);
+            log_fuzzy(g.t, fout.scale_R_gps, fout.scale_Q, fout.scale_gate); // log fuzzy scalers
 
             continue;
         }
 
-        /* If nothing available, check termination condition */
-        if (*(cargs->producers_done) >= 2   &&
-                rb_is_empty(cargs->imu_rb)  &&
-                rb_is_empty(cargs->gps_rb))
-            break;
-
+        if (*(cargs->producers_done) >= 2 && rb_is_empty(cargs->imu_rb) && rb_is_empty(cargs->gps_rb))
+            break;         // If nothing available, check termination condition
         usleep(1);
     }
 

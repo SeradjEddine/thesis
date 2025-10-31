@@ -6,52 +6,82 @@
 #define _GNU_SOURCE
 #define _XOPEN_SOURCE 700
 
-int read_oxts_csv(const char *filename, struct imu_sample *imus, int max_imus, struct gps_sample *gps, int max_gps)
+/**
+ * Reads OXTS CSV (with relative time as the last column) and fills IMU and GPS arrays.
+ * parsing using comma-splitting to handle all numeric columns.
+ *
+ * @param filename   Path to CSV file
+ * @param imus       Output array for IMU samples
+ * @param max_imus   Capacity of IMU array
+ * @param gps        Output array for GPS samples
+ * @param max_gps    Capacity of GPS array
+ * @return           Number of samples successfully read (min of IMU/GPS count)
+ */
+
+int sensor_reader(const char *filename,
+                  struct imu_sample *imus, int max_imus,
+                  struct gps_sample *gps, int max_gps)
 {
+    FILE *fp = fopen(filename, "r");
+    if (!fp) {
+        perror("fopen");
+        return -1;
+    }
+
     char line[1024];
-    char *rest = line; 
-    char *token;
-    double values[26];
     int imu_count = 0;
     int gps_count = 0;
-    int i = 0;       
 
-    FILE *fp = fopen(filename, "r"); //opens the file
-    if (!fp)
-        return (perror("fopen"), -1);
+    // Skip header line
+    if (!fgets(line, sizeof(line), fp)) {
+        fclose(fp);
+        return -1;
+    }
 
-    if (!fgets(line, sizeof(line), fp)) // Skips header line
-        return ( fclose(fp), -1);
-
-    while (fgets(line, sizeof(line), fp))
-    {
+    while (fgets(line, sizeof(line), fp)) {
         if (imu_count >= max_imus || gps_count >= max_gps)
             break;
 
-        token = strtok(rest, ","); // Tokenize by commas
-        while (token && i < 26)
-        {
+        // Tokenize by commas
+        char *rest = line;
+        char *token;
+        double values[26]; // 23 original + 2 skipped + 1 rel_time
+        int i = 0;
+
+        while ((token = strtok_r(rest, ",", &rest)) && i < 26)
             values[i++] = atof(token);
-            token = strtok(NULL, ",");
+
+        if (i < 24) // must have at least 23 sensor fields (KITTI format) + rel_time
+        { 
+            fprintf(stderr, "Parse error: expected ≥24 fields, got %d\n", i);
+            continue;
         }
 
-        if (i < 24)     // must have at least 23 sensor fields (KITTI format) + rel_time
-            return (fprintf(stderr, "Parse error: expected ≥24 fields, got %d\n", i), -1);
-
-        // Map columns to variables the commented are unused
+        // Map columns to variables
         double lat  = values[0];
         double lon  = values[1];
         double alt  = values[2];
+        double roll = values[3];
+        double pitch= values[4];
+        double yaw  = values[5];
         double vn   = values[6];
         double ve   = values[7];
+        double vf   = values[8];
+        double vl   = values[9];
         double vu   = values[10];
         double ax   = values[11];
         double ay   = values[12];
         double az   = values[13];
+        double af   = values[14];
+        double al   = values[15];
+        double au   = values[16];
         double wx   = values[17];
         double wy   = values[18];
         double wz   = values[19];
-        double rel_time = values[i-1];
+        double wf   = values[20];
+        double wl   = values[21];
+        double wu   = values[22];
+        double rel_time = values[i-1]; // last column
 
         // Store GPS sample
         gps[gps_count].t   = rel_time;
@@ -72,24 +102,22 @@ int read_oxts_csv(const char *filename, struct imu_sample *imus, int max_imus, s
         imus[imu_count].wy = wy;
         imus[imu_count].wz = wz;
         imu_count++;
+
+        (void) roll;
+        (void) pitch;
+        (void) yaw;
+        (void) vf;
+        (void) vl;
+        (void) af;
+        (void) al;
+        (void) au;
+        (void) wf;
+        (void) wl;
+        (void) wu;
     }
 
     fclose(fp);
 
-    if (imu_count < gps_count)
-        return imu_count;
-    else
-        return gps_count;
+    return imu_count < gps_count ? imu_count : gps_count;
 }
 
-        //double roll = values[3];
-        //double pitch= values[4];
-        //double yaw  = values[5];
-        //double vf   = values[8];
-        //double vl   = values[9];
-        //double af   = values[14];
-        //double al   = values[15];
-        //double au   = values[16];
-        //double wf   = values[20];
-        //double wl   = values[21];
-        //double wu   = values[22];

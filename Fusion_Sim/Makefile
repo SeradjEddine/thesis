@@ -1,6 +1,6 @@
 # ---- Compiler and flags ---------------------------------------------------- #
 CC      := cc
-CFLAGS  := -Wall -Wextra -Werror -pthread -I./include -I./src/mathlib
+CFLAGS  := -Wall -Werror -Wextra -pthread -I./include -I./src/mathlib
 LDLIBS  := -lm 
 
 # ---- Project structure ----------------------------------------------------- #
@@ -19,7 +19,8 @@ SRCS := consumer.c \
         main.c \
         producer.c \
         ringbuffer.c \
-        sensor_reader.c
+        sensor_reader.c \
+        multi_fuse.c
 
 # Map sources to object files in build/
 OBJS := $(addprefix $(BUILD_DIR)/, $(SRCS:.c=.o))

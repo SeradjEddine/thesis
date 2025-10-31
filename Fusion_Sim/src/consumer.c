@@ -32,14 +32,14 @@ void *consumer_thread(void *arg)
     // Wait for first IMU sample
     struct imu_sample first_imu;
     while (rb_is_empty(cargs->imu_rb))
-        usleep(1);
+        usleep(1000);
 
     rb_peek(cargs->imu_rb, &first_imu);
     ekf_init(&state, P, first_imu.t);
 
     open_state_log("proccessed_csv/imu_prop.csv");
     open_gps_log("proccessed_csv/gps_updates.csv");
-    open_fuzzy_log("proccessed_csv/fuzzy_updates.csv");
+    open_fuzzy_log("proccessed_csv/fuzzy.csv");
 
     fuzzy_params_t fparams = 
     {
@@ -151,7 +151,7 @@ void *consumer_thread(void *arg)
 
         if (*(cargs->producers_done) >= 2 && rb_is_empty(cargs->imu_rb) && rb_is_empty(cargs->gps_rb))
             break;         // If nothing available, check termination condition
-        usleep(1);
+        usleep(1000);
     }
 
     close_state_log();

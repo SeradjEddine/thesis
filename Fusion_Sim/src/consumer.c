@@ -9,6 +9,12 @@
 #include <unistd.h>
 #include <string.h>
 #include <time.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <string.h>
+#include <errno.h>
+
+#define PATH_MAX 100
 
 // Default GPS measurement noise (standard deviation)
 static const double GPS_POS_STD = 1.0; // meters
@@ -17,6 +23,23 @@ static const double GPS_VEL_STD = 0.2; // m/s
 unsigned int interval_ms = 10;
 struct timespec ts;
 
+// Create all parent directories recursively
+static void create_directory_recursive(const char *path)
+{
+    char tmp[PATH_MAX];
+    snprintf(tmp, sizeof(tmp), "%s", path);
+
+    for (char *p = tmp + 1; *p; p++)
+    {
+        if (*p == '/')
+        {
+            *p = '\0';
+            mkdir(tmp, 0777);  // ignore EEXIST
+            *p = '/';
+        }
+    }
+    mkdir(tmp, 0777);  // create final directory
+}
 void *consumer_thread(void *arg)
 {
     struct consumer_args *cargs = (struct consumer_args *)arg;
@@ -37,9 +60,18 @@ void *consumer_thread(void *arg)
     rb_peek(cargs->imu_rb, &first_imu);
     ekf_init(&state, P, first_imu.t);
 
-    open_state_log("proccessed_csv/imu_prop.csv");
-    open_gps_log("proccessed_csv/gps_updates.csv");
-    open_fuzzy_log("proccessed_csv/fuzzy.csv");
+    char imu_path[PATH_MAX];
+    char gps_path[PATH_MAX];
+    char fuzzy_path[PATH_MAX];
+
+    create_directory_recursive(cargs->output_dir);
+    snprintf(imu_path, sizeof(imu_path), "%s/imu_prop.csv", cargs->output_dir);
+    snprintf(gps_path, sizeof(gps_path), "%s/gps_updates.csv", cargs->output_dir);
+    snprintf(fuzzy_path, sizeof(fuzzy_path), "%s/fuzzy.csv", cargs->output_dir);
+
+    open_state_log(imu_path);
+    open_gps_log(gps_path);
+    open_fuzzy_log(fuzzy_path);
 
     fuzzy_params_t fparams = 
     {

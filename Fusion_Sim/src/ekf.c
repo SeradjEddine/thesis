@@ -564,9 +564,9 @@ int ekf_propagate(struct ekf_state *x, double P[P_DIM], const struct imu_sample 
     /* 1) bias-corrected measurements */
     double omega_b[3] = 
     { 
-        imu->ax - x->bg[0],
-        imu->ay - x->bg[1],
-        imu->az - x->bg[2] };
+        imu->wx - x->bg[0],
+        imu->wy - x->bg[1],
+        imu->wz - x->bg[2] };
 
     double acc_b[3] = 
     { 

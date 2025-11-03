@@ -86,9 +86,9 @@ static struct gps_node *array_to_gps_list(struct gps_sample *arr, int count)
 
 int main(int argc, char **argv)
 {
-    if (argc < 3)
+    if (argc < 4)
     {
-        fprintf(stderr, "Usage: %s <num_sensors> <file_prefix>\n", argv[0]);
+        fprintf(stderr, "Usage: %s <num_sensors> <input_file_prefix> <output_dir>\n", argv[0]);
         fprintf(stderr, "Example: %s 3 ../Data/oxts_csv/oxts\n", argv[0]);
         return 1;
     }
@@ -254,7 +254,8 @@ int main(int argc, char **argv)
     struct consumer_args cons_args = {
         .imu_rb = &imu_rb,
         .gps_rb = &gps_rb,
-        .producers_done = &producers_done
+        .producers_done = &producers_done,
+        .output_dir = argv[3]
     };
 
     pthread_t imu_thread, gps_thread, cons_thread;

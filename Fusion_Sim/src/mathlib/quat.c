@@ -37,22 +37,42 @@ void quat_rotate_vec(const double q[4], const double v[3], double out[3]) {
     out[2] = result[3];
 }
 
-/* Build quaternion from angular velocity ω and timestep dt */
-void quat_from_omega(const double omega[3], double dt, double q_delta[4]) {
-    double theta = sqrt(omega[0]*omega[0] + omega[1]*omega[1] + omega[2]*omega[2]) * dt;
-    if (theta < 1e-12) {
+void quat_from_omega(const double omega[3], double dt, double q_delta[4])
+{
+    /* small-angle quaternion using axis-angle */
+    double angle = sqrt(omega[0]*omega[0] + omega[1]*omega[1] + omega[2]*omega[2]) * dt;
+
+    if (angle < 1e-8)
+    {
+        /* approximate: q = [1, 0.5*omega*dt] */
         q_delta[0] = 1.0;
-        q_delta[1] = q_delta[2] = q_delta[3] = 0.0;
-        return;
+        q_delta[1] = 0.5 * omega[0] * dt;
+        q_delta[2] = 0.5 * omega[1] * dt;
+        q_delta[3] = 0.5 * omega[2] * dt;
     }
 
-    double half_theta = theta * 0.5;
-//    double s = sin(half_theta) / (theta > 0 ? theta : 1.0);
+    else
+    {
+        double ux = (omega[0]) / (angle/dt);
+        double uy = (omega[1]) / (angle/dt);
+        double uz = (omega[2]) / (angle/dt);
+        double half = 0.5 * angle;
+        q_delta[0] = cos(half);
+        double s = sin(half);
+        q_delta[1] = ux * s;
+        q_delta[2] = uy * s;
+        q_delta[3] = uz * s;
+    }
+                            /* normalize */
+    double n = sqrt(q_delta[0]*q_delta[0] + q_delta[1]*q_delta[1] + q_delta[2]*q_delta[2] + q_delta[3]*q_delta[3]);
 
-    q_delta[0] = cos(half_theta);
-    q_delta[1] = omega[0] * dt * 0.5 * (1.0 / (dt > 0 ? sqrt(omega[0]*omega[0] + omega[1]*omega[1] + omega[2]*omega[2]) : 1.0));
-    q_delta[2] = omega[1] * dt * 0.5 * (1.0 / (dt > 0 ? sqrt(omega[0]*omega[0] + omega[1]*omega[1] + omega[2]*omega[2]) : 1.0));
-    q_delta[3] = omega[2] * dt * 0.5 * (1.0 / (dt > 0 ? sqrt(omega[0]*omega[0] + omega[1]*omega[1] + omega[2]*omega[2]) : 1.0));
+    if (n > 0.0)
+    {
+        q_delta[0] /= n;
+        q_delta[1] /= n; 
+        q_delta[2] /= n; 
+        q_delta[3] /= n;
+    }
 }
 
 /*
@@ -79,45 +99,10 @@ void quat_to_rotmat(const double q[4], double R[9])
     R[7] = 2.0*(yz + wx);
     R[8] = ww - xx - yy + zz;
 }
-
-/*
-
-void print_quat(const double q[4]) {
-    printf("[%g, %g, %g, %g]\n", q[0], q[1], q[2], q[3]);
+/* skew symmetric for v -> S (3x3 row-major) */
+void skew(const double v[3], double S[9])
+{
+    S[0]= 0.0;   S[1]=-v[2];  S[2]= v[1];
+    S[3]= v[2];  S[4]= 0.0;   S[5]=-v[0];
+    S[6]=-v[1];  S[7]= v[0];  S[8]= 0.0;
 }
-
-void print_vec3(const double v[3]) {
-    printf("[%g, %g, %g]\n", v[0], v[1], v[2]);
-}
-
-
-
-
-
-int main(void) {
-    printf("Normalize test:\n");
-    double q1[4] = {2, 0, 0, 0};
-    quat_normalize(q1);
-    print_quat(q1);  // Expected [1,0,0,0]
-
-    printf("\nRotation test (90 deg about Z):\n");
-    double angle = M_PI / 2;
-    double qz[4] = {cos(angle/2), 0, 0, sin(angle/2)}; // 90° around Z
-    double v[3] = {1, 0, 0};
-    double v_rot[3];
-    quat_rotate_vec(qz, v, v_rot);
-    print_vec3(v_rot); // Expected [0,1,0]
-
-    printf("\nFrom omega test (w=[0,0,pi/2], dt=1):\n");
-    double omega[3] = {0, 0, M_PI/2};
-    double q_delta[4];
-    quat_from_omega(omega, 1.0, q_delta);
-    quat_normalize(q_delta);
-    print_quat(q_delta);
-    quat_rotate_vec(q_delta, v, v_rot);
-    print_vec3(v_rot); // Expected [0,1,0]
-
-    return 0;
-}
-
-*/

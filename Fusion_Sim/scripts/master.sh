@@ -7,7 +7,7 @@ set -e
 # Default parameters
 N_TOTAL=5
 N_CORRUPT=0
-ERROR_RATE=0.03
+ERROR_RATE=0.00
 SIM_JOBS=4
 PLOT_JOBS=4
 

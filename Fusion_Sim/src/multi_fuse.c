@@ -61,7 +61,7 @@ static void build_diag3(const double diag[3], double out[9])
 }
 
 /* append fused imu node to list */
-static struct fused_imu *append_fused_imu(struct fused_imu **head, struct fused_imu **tail, struct fused_imu *node)
+struct fused_imu *append_fused_imu(struct fused_imu **head, struct fused_imu **tail, struct fused_imu *node)
 {
     node->next = NULL;
     if (*tail == NULL) {
@@ -74,7 +74,7 @@ static struct fused_imu *append_fused_imu(struct fused_imu **head, struct fused_
 }
 
 /* append fused gps */
-static struct fused_gps *append_fused_gps(struct fused_gps **head, struct fused_gps **tail, struct fused_gps *node)
+struct fused_gps *append_fused_gps(struct fused_gps **head, struct fused_gps **tail, struct fused_gps *node)
 {
     if (!node)
         return NULL;

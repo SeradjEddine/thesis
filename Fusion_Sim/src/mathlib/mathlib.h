@@ -54,11 +54,10 @@ void quat_to_rotmat(const double q[4], double R[9]);
 void quat_rotate_vec(const double q[4], const double v[3], double out[3]);
 
 /* Construct from angular velocity */
-void quat_from_omega(const double omega[3], double dt, double q_delta[4]);
+static void quat_from_omega(const double omega[3], double dt, double q_delta[4]);
 
+void skew(const double v[3], double S[9]);
 
-void skew_symmetric(const double v[3], double S[9]);
-void enforce_psd(int n, double *P);
 
 #endif /* MATHLIB_H */
 

@@ -10,7 +10,7 @@ static const fuzzy_params_t default_params =
     .max_scale_Q = 2.0,
     .min_scale_gate = 0.85,
     .max_scale_gate = 1.5,
-    .smoothing_alpha = 0.85
+    .smoothing_alpha = 0.15
 };
 
 // Internal state

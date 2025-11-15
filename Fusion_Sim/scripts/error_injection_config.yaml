@@ -1,0 +1,55 @@
+# ============================
+# Sensor Error Injection Config
+# ============================
+
+# 1) Global defaults (applied when model sections omit a field)
+defaults:
+  seed: 42            # base seed for reproducible randomness
+  magnitude_std: 3.0  # scaling multiplier for gaussian outliers
+  probability: 0.02   # default likelihood of injecting ANY event of a model
+
+# 2) GPS-related degradation models
+gps:
+  bias_drift:
+    enable: true
+    probability: 0.015
+    bias_std: 1.5         # meters
+    drift_per_sec: 0.1    # meters/sec
+
+  jumps:
+    enable: true
+    probability: 0.002
+    magnitude: 30.0       # sudden meter jump
+    hold_duration: 1.0    # seconds to hold warped value
+
+  dropout:
+    enable: true
+    probability: 0.01
+    blackout_prob: 0.5    # probability that whole sample is NaN
+    freeze_prob: 0.3      # probability that value freezes instead
+    noise_std: 10.0       # noise when only partially degraded
+
+# 3) IMU-related degradation models
+imu:
+  saturation:
+    enable: true
+    probability: 0.01
+    saturation_level: 2.5   # absolute limit
+
+  bias_walk:
+    enable: true
+    probability: 0.02
+    walk_std: 0.01          # random walk per sample
+
+  spikes:
+    enable: true
+    probability: 0.002
+    multiplier: 8.0          # multiplicative spike size
+
+# 4) Rare catastrophic sensor-wide events
+catastrophic:
+  enable: true
+  probability: 0.0005
+  duration_sec: 5.0          # how long the distortion lasts
+  multiplier: 20.0           # large magnification
+

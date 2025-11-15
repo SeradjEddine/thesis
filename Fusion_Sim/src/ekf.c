@@ -6,10 +6,6 @@
 
 static const double GRAVITY[3] = {0.0, 0.0, -9.81};
 
-/* Mahalanobis gating threshold for 3 DoF at 0.997 confidence ~ 16.27 */
-static const double MAHALANOBIS_THRESH_POS = 16.27; // for 3 DOF
-static const double MAHALANOBIS_THRESH_VEL = 16.27; // same for velocity
-
 /* ---- WGS84 / ECEF helpers for lat/lon -> ENU ----
    We'll convert lat/lon/alt to ECEF then subtract the reference ECEF and rotate to ENU.
    Use first GPS sample as reference; call ekf_init_gps_ref(lat0,lon0,alt0).
@@ -88,368 +84,270 @@ void latlon_to_enu(double lat_deg, double lon_deg, double alt_m, double enu_out[
      2) velocity measurement update (3D)
    For each: compute innovation, S, Kalman gain, gating, update state and P.
 */
-int ekf_update_gps(struct ekf_state *x, double P[P_DIM], const double gps_pos_enu[3], const double gps_vel_enu[3], const double Rpos[9],
-                        const double Rvel[9], double *out_mahalanobis_pos, int *out_accepted_pos, double *out_mahalanobis_vel, int *out_accepted_vel)
+
+
+int ekf_update_gps(struct ekf_state *x, double P[P_DIM],
+                   const double gps_pos_enu[3], const double gps_vel_enu[3],
+                   const double Rpos[9], const double Rvel[9],
+                   double *out_mahalanobis_pos, int *out_accepted_pos,
+                   double *out_mahalanobis_vel, int *out_accepted_vel)
 {
-    /* 1) Position update: Hpos = [I3 0 0 0 0] (3x15) */
+
+    // --- Safety: handle unused params in partial builds
+    (void)gps_vel_enu;
+    (void)out_mahalanobis_vel;
+    (void)out_accepted_vel;
+
+    /* ===================== 1) POSITION UPDATE ===================== */
     double zpos[3] = { gps_pos_enu[0], gps_pos_enu[1], gps_pos_enu[2] };
     double hpos[3] = { x->p[0], x->p[1], x->p[2] };
     double ypos[3];
-    double Ppp[9];
-    double Spos[9];
-    double Spos_inv[9];
-    
-    for (int i=0;i<3;++i)
+    for (int i = 0; i < 3; ++i)
         ypos[i] = zpos[i] - hpos[i];
 
-    /* S = H P H^T + R => since H picks p block, S = P_pp + Rpos (3x3) */
-    for (int r=0;r<3;++r)
-        for (int c=0;c<3;++c)
-            Ppp[r*3 + c] = P[IDX(r,c)];
+    double Ppp[9], Spos[9], Spos_inv[9];
+    for (int r = 0; r < 3; ++r)
+        for (int c = 0; c < 3; ++c)
+            Ppp[r*3 + c] = P[IDX(r, c)];
 
-
-    for (int k=0;k<9;++k)
+    for (int k = 0; k < 9; ++k)
         Spos[k] = Ppp[k] + Rpos[k];
 
-    /* invert Spos (3x3) */
-    if (mat_inverse_3x3(Spos, Spos_inv) != 0)
-    {
-        if (out_accepted_pos)
-            *out_accepted_pos = 0;
-        if (out_mahalanobis_pos) 
-            *out_mahalanobis_pos = 1e9;
-    } 
-    else
-    {
-        /* mahalanobis distance d2 = y^T * S^-1 * y */
-        double tmpv[3];
-        mat_vec_mult(3, 3, Spos_inv, ypos, tmpv); // tmpv = S^-1 * y
-
-        double d2 = ypos[0]*tmpv[0] + ypos[1]*tmpv[1] + ypos[2]*tmpv[2];
-        if (out_mahalanobis_pos)
-            *out_mahalanobis_pos = d2;
-        if (d2 > MAHALANOBIS_THRESH_POS)
-        {
-            if (out_accepted_pos) /* reject update */
-                *out_accepted_pos = 0;
-        }
-        else
-        {
-            if (out_accepted_pos)
-                *out_accepted_pos = 1;
-
-    /* Compute K = P * H^T * S^-1 Since H^T is 15x3 with identity in rows 0..2, K = P(:,0:2) * S^-1 (15x3) */
-            double P_col03[STATE_DIM * 3]; // 15x3 copy of P(:,0..2)
-            for (int r=0;r<STATE_DIM;++r)
-                for (int c=0;c<3;++c)
-                    P_col03[r*3 + c] = P[IDX(r,c)];
-
-            double K[STATE_DIM * 3]; // 15x3
-            // K = P_col03 * Spos_inv  (15x3 * 3x3 -> 15x3)
-            mat_mult(STATE_DIM, 3, 3, P_col03, Spos_inv, K);
-
-            /* Apply state correction x += K * ypos (dx = K * ypos) */
-            double dx[STATE_DIM];
-            for (int r=0;r<STATE_DIM;++r)
-            {
-                double sum = 0.0;
-                for (int c=0;c<3;++c) sum += K[r*3 + c] * ypos[c];
-                dx[r] = sum;
-            }
-
-            /* Update nominal state components:
-               p += dx[0:3]
-               v += dx[3:6]
-               orientation apply small-angle dx[6:9]
-               bg += dx[9:12]
-               ba += dx[12:15]
-            */
-            for (int i=0;i<3;++i)
-                x->p[i] += dx[i];
-            for (int i=0;i<3;++i)
-                x->v[i] += dx[3+i];
-
-            /* orientation small-angle to quaternion delta */
-            double dtheta[3] = { dx[6], dx[7], dx[8] };
-
-            /* convert small-angle vector to quaternion: qd ~ [1, 0.5*dtheta] */
-            double qd[4];
-            qd[0] = 1.0;
-            qd[1] = 0.5 * dtheta[0];
-            qd[2] = 0.5 * dtheta[1];
-            qd[3] = 0.5 * dtheta[2];
-
-            /* normalize qd */
-            double qd_norm = sqrt(qd[0]*qd[0] + qd[1]*qd[1] + qd[2]*qd[2] + qd[3]*qd[3]);
-            if (qd_norm > 0)
-            {
-                qd[0]/=qd_norm;
-                qd[1]/=qd_norm;
-                qd[2]/=qd_norm;
-                qd[3]/=qd_norm;
-            }
-
-            /* quaternion multiply x->q = qd ⊗ x->q  (left-multiplication) */
-            double qnew[4];
-            qnew[0] = qd[0]*x->q[0] - qd[1]*x->q[1] - qd[2]*x->q[2] - qd[3]*x->q[3];
-            qnew[1] = qd[0]*x->q[1] + qd[1]*x->q[0] + qd[2]*x->q[3] - qd[3]*x->q[2];
-            qnew[2] = qd[0]*x->q[2] - qd[1]*x->q[3] + qd[2]*x->q[0] + qd[3]*x->q[1];
-            qnew[3] = qd[0]*x->q[3] + qd[1]*x->q[2] - qd[2]*x->q[1] + qd[3]*x->q[0];
-
-            /* normalize */
-            double nqn = sqrt(qnew[0]*qnew[0]+qnew[1]*qnew[1]+qnew[2]*qnew[2]+qnew[3]*qnew[3]);
-            if (nqn > 0)
-            { 
-                x->q[0] = qnew[0]/nqn; 
-                x->q[1] = qnew[1]/nqn; 
-                x->q[2] = qnew[2]/nqn; 
-                x->q[3] = qnew[3]/nqn; 
-            }
-
-            for (int i=0;i<3;++i)
-                x->bg[i] += dx[9+i];
-            for (int i=0;i<3;++i)
-                x->ba[i] += dx[12+i];
-
-            /* Covariance Joseph form: P = (I - K H) P (I - K H)^T + K R K^T
-               But H is simple: Hpos picks p. For simplicity and speed we compute:
-               P = P - K * H * P  (where H*P extracts top rows) then symmetrize.
-               We'll compute P = P - K * (Ppp)  + K * Rpos * K^T
-            */
-
-            double KH_timesPpp[STATE_DIM * STATE_DIM];  // K(15x3) * Ppp(3x15) => 15x15
-
-            // First build Ppp as 3x15? We have Ppp 3x3; we need Ppp_full = H*P (3x15) which is simply first 3 rows of P
-            double P_first3rows[3 * STATE_DIM];
-            for (int r=0;r<3;++r)
-                for (int c=0;c<STATE_DIM;++c)
-                    P_first3rows[r*STATE_DIM + c] = P[IDX(r,c)];
-            // KH_timesPpp = K (15x3) * P_first3rows (3x15) => 15x15
-            mat_mult(STATE_DIM, 3, STATE_DIM, K, P_first3rows, KH_timesPpp);
-
-            // P = P - KH_timesPpp
-            for (int r=0;r<STATE_DIM;++r)
-                for (int c=0;c<STATE_DIM;++c)
-                    P[IDX(r,c)] -= KH_timesPpp[r*STATE_DIM + c];
-
-            // Add K * R * K^T term:
-            double KR[STATE_DIM * 3];
-            mat_mult(STATE_DIM, 3, 3, K, Rpos, KR); // 15x3
-            double KRKT[STATE_DIM * STATE_DIM];
-            // KRKT = KR * K^T (15x3 * 3x15)
-            double Kt[3 * STATE_DIM];
-            // compute K^T (3x15)
-            for (int r=0;r<3;++r)
-                for (int c=0;c<STATE_DIM;++c)
-                    Kt[r*STATE_DIM + c] = K[c*3 + r];
-            mat_mult(STATE_DIM, 3, STATE_DIM, KR, Kt, KRKT);
-            for (int i=0;i<STATE_DIM*STATE_DIM;++i) 
-                P[i] += KRKT[i];
-
-            // ensure symmetry
-            for (int r=0;r<STATE_DIM;++r)
-                for (int c=r+1;c<STATE_DIM;++c)
-                {
-                    double avg = 0.5*(P[IDX(r,c)] + P[IDX(c,r)]);
-                    P[IDX(r,c)] = avg;
-                    P[IDX(c,r)] = avg;
-                }
-        }
+    if (mat_inverse_3x3(Spos, Spos_inv) != 0) {
+        if (out_mahalanobis_pos) *out_mahalanobis_pos = 1e9;
+        if (out_accepted_pos) *out_accepted_pos = 0;
+        return -1;
     }
 
-    /* 2) Velocity update: similar pattern but Hvel maps to v indices (3..5) */
+    // --- Mahalanobis test for position ---
+    double tmpv[3];
+    mat_vec_mult(3, 3, Spos_inv, ypos, tmpv);
+    double d2_pos = ypos[0]*tmpv[0] + ypos[1]*tmpv[1] + ypos[2]*tmpv[2];
+    if (out_mahalanobis_pos) *out_mahalanobis_pos = d2_pos;
+
+    if (d2_pos > MAHALANOBIS_THRESH_POS) {
+        if (out_accepted_pos) *out_accepted_pos = 0;
+    } else {
+        if (out_accepted_pos) *out_accepted_pos = 1;
+
+        /* Compute K = P(:,0:2) * Spos_inv  (15x3) */
+        double P_col03[STATE_DIM * 3];
+        for (int r = 0; r < STATE_DIM; ++r)
+            for (int c = 0; c < 3; ++c)
+                P_col03[r*3 + c] = P[IDX(r, c)];
+
+        double K[STATE_DIM * 3];
+        mat_mult(STATE_DIM, 3, 3, P_col03, Spos_inv, K);
+
+        double dx[STATE_DIM];
+        for (int r = 0; r < STATE_DIM; ++r) {
+            double sum = 0.0;
+            for (int c = 0; c < 3; ++c) sum += K[r*3 + c] * ypos[c];
+            dx[r] = sum;
+        }
+
+        // --- Apply correction ---
+        for (int i = 0; i < 3; ++i) x->p[i] += dx[i];
+        for (int i = 0; i < 3; ++i) x->v[i] += dx[3+i];
+
+        // --- Orientation small-angle update ---
+        double dtheta[3] = { dx[6], dx[7], dx[8] };
+        double qd[4] = { 1.0, 0.5*dtheta[0], 0.5*dtheta[1], 0.5*dtheta[2] };
+        double qd_norm = sqrt(qd[0]*qd[0] + qd[1]*qd[1] + qd[2]*qd[2] + qd[3]*qd[3]);
+        if (qd_norm > 0) for (int i=0; i<4; ++i) qd[i] /= qd_norm;
+
+        double qnew[4];
+        qnew[0] = qd[0]*x->q[0] - qd[1]*x->q[1] - qd[2]*x->q[2] - qd[3]*x->q[3];
+        qnew[1] = qd[0]*x->q[1] + qd[1]*x->q[0] + qd[2]*x->q[3] - qd[3]*x->q[2];
+        qnew[2] = qd[0]*x->q[2] - qd[1]*x->q[3] + qd[2]*x->q[0] + qd[3]*x->q[1];
+        qnew[3] = qd[0]*x->q[3] + qd[1]*x->q[2] - qd[2]*x->q[1] + qd[3]*x->q[0];
+        double nq = sqrt(qnew[0]*qnew[0]+qnew[1]*qnew[1]+qnew[2]*qnew[2]+qnew[3]*qnew[3]);
+        if (nq > 0) for (int i=0;i<4;++i) x->q[i] = qnew[i]/nq;
+
+        for (int i = 0; i < 3; ++i) x->bg[i] += dx[9+i];
+        for (int i = 0; i < 3; ++i) x->ba[i] += dx[12+i];
+
+        // --- Covariance update ---
+        double P_first3rows[3 * STATE_DIM];
+        for (int r=0; r<3; ++r)
+            for (int c=0; c<STATE_DIM; ++c)
+                P_first3rows[r*STATE_DIM + c] = P[IDX(r,c)];
+
+        double KH[STATE_DIM * STATE_DIM];
+        mat_mult(STATE_DIM, 3, STATE_DIM, K, P_first3rows, KH);
+        for (int i=0;i<P_DIM;++i) P[i] -= KH[i];
+
+        double KR[STATE_DIM * 3];
+        mat_mult(STATE_DIM, 3, 3, K, Rpos, KR);
+        double Kt[3 * STATE_DIM];
+        for (int r=0; r<3; ++r)
+            for (int c=0; c<STATE_DIM; ++c)
+                Kt[r*STATE_DIM + c] = K[c*3 + r];
+
+        double KRKT[STATE_DIM * STATE_DIM];
+        mat_mult(STATE_DIM, 3, STATE_DIM, KR, Kt, KRKT);
+        for (int i=0;i<P_DIM;++i) P[i] += KRKT[i];
+
+        for (int r=0;r<STATE_DIM;++r)
+            for (int c=r+1;c<STATE_DIM;++c) {
+                double avg = 0.5*(P[IDX(r,c)] + P[IDX(c,r)]);
+                P[IDX(r,c)] = P[IDX(c,r)] = avg;
+            }
+    }
+
+    /* ===================== 2) VELOCITY UPDATE ===================== */
     double zvel[3] = { gps_vel_enu[0], gps_vel_enu[1], gps_vel_enu[2] };
     double hvel[3] = { x->v[0], x->v[1], x->v[2] };
     double yvel[3];
+    for (int i=0;i<3;++i) yvel[i] = zvel[i] - hvel[i];
 
-    for (int i=0;i<3;++i) 
-        yvel[i] = zvel[i] - hvel[i];
-
-    /* Svel = Pvv + Rvel where Pvv is P[3..5,3..5] */
-    double Pvv[9];
+    double Pvv[9], Svel[9], Svel_inv[9];
     for (int r=0;r<3;++r)
         for (int c=0;c<3;++c)
             Pvv[r*3 + c] = P[IDX(3 + r, 3 + c)];
 
-    double Svel[9];
     for (int k=0;k<9;++k)
         Svel[k] = Pvv[k] + Rvel[k];
 
-    double Svel_inv[9];
-    if (mat_inverse_3x3(Svel, Svel_inv) != 0)
-    {
-        if (out_accepted_vel)
-            *out_accepted_vel = 0;
-        if (out_mahalanobis_vel)
-            *out_mahalanobis_vel = 1e9;
+    if (mat_inverse_3x3(Svel, Svel_inv) != 0) {
+        if (out_mahalanobis_vel) *out_mahalanobis_vel = 1e9;
+        if (out_accepted_vel) *out_accepted_vel = 0;
+        return -2;
     }
 
-    else
-    {
-        /* mahalanobis */
-        double tmpv2[3];
-        mat_vec_mult(3,3,Svel_inv,yvel,tmpv2);
-        double d2v = yvel[0]*tmpv2[0] + yvel[1]*tmpv2[1] + yvel[2]*tmpv2[2];
+    double tmpv2[3];
+    mat_vec_mult(3, 3, Svel_inv, yvel, tmpv2);
+    double d2_vel = yvel[0]*tmpv2[0] + yvel[1]*tmpv2[1] + yvel[2]*tmpv2[2];
+    if (out_mahalanobis_vel) *out_mahalanobis_vel = d2_vel;
 
-        if (out_mahalanobis_vel)
-            *out_mahalanobis_vel = d2v;
-        if (d2v > MAHALANOBIS_THRESH_VEL)
-        {
-            if (out_accepted_vel)
-                *out_accepted_vel = 0;
+    if (d2_vel > MAHALANOBIS_THRESH_VEL) {
+        if (out_accepted_vel) *out_accepted_vel = 0;
+    } else {
+        if (out_accepted_vel) *out_accepted_vel = 1;
+
+        double P_col3_5[STATE_DIM * 3];
+        for (int r=0;r<STATE_DIM;++r)
+            for (int c=0;c<3;++c)
+                P_col3_5[r*3 + c] = P[IDX(r, 3 + c)];
+
+        double Kvel[STATE_DIM * 3];
+        mat_mult(STATE_DIM, 3, 3, P_col3_5, Svel_inv, Kvel);
+
+        double dxv[STATE_DIM];
+        for (int r=0;r<STATE_DIM;++r) {
+            double sum=0.0;
+            for (int c=0;c<3;++c) sum += Kvel[r*3 + c] * yvel[c];
+            dxv[r]=sum;
         }
-        
-        else
-        {
-            if (out_accepted_vel)
-                *out_accepted_vel = 1;
 
-            /* Kvel = P(:,3:5) * Svel_inv (15x3) */
-            double P_col3_5[STATE_DIM * 3];
-            for (int r=0;r<STATE_DIM;++r)
-                for (int c=0;c<3;++c)
-                    P_col3_5[r*3 + c] = P[IDX(r, 3 + c)];
+        for (int i=0;i<3;++i) x->p[i] += dxv[i];
+        for (int i=0;i<3;++i) x->v[i] += dxv[3+i];
 
-            double Kvel[STATE_DIM * 3];
-            mat_mult(STATE_DIM, 3, 3, P_col3_5, Svel_inv, Kvel);
+        double dtheta2[3] = { dxv[6], dxv[7], dxv[8] };
+        double qd2[4] = { 1.0, 0.5*dtheta2[0], 0.5*dtheta2[1], 0.5*dtheta2[2] };
+        double qd2n = sqrt(qd2[0]*qd2[0]+qd2[1]*qd2[1]+qd2[2]*qd2[2]+qd2[3]*qd2[3]);
+        if (qd2n>0) for (int i=0;i<4;++i) qd2[i]/=qd2n;
 
-            double dxv[STATE_DIM];
-            for (int r=0;r<STATE_DIM;++r)
-            {
-                double sum=0.0;
-                for (int c=0;c<3;++c) 
-                    sum += Kvel[r*3 + c] * yvel[c];
-                dxv[r] = sum;
+        double qnew2[4];
+        qnew2[0]=qd2[0]*x->q[0]-qd2[1]*x->q[1]-qd2[2]*x->q[2]-qd2[3]*x->q[3];
+        qnew2[1]=qd2[0]*x->q[1]+qd2[1]*x->q[0]+qd2[2]*x->q[3]-qd2[3]*x->q[2];
+        qnew2[2]=qd2[0]*x->q[2]-qd2[1]*x->q[3]+qd2[2]*x->q[0]+qd2[3]*x->q[1];
+        qnew2[3]=qd2[0]*x->q[3]+qd2[1]*x->q[2]-qd2[2]*x->q[1]+qd2[3]*x->q[0];
+        double n2=sqrt(qnew2[0]*qnew2[0]+qnew2[1]*qnew2[1]+qnew2[2]*qnew2[2]+qnew2[3]*qnew2[3]);
+        if (n2>0) for (int i=0;i<4;++i) x->q[i]=qnew2[i]/n2;
+
+        for (int i=0;i<3;++i) x->bg[i]+=dxv[9+i];
+        for (int i=0;i<3;++i) x->ba[i]+=dxv[12+i];
+
+        double P_rows_3_5[3 * STATE_DIM];
+        for (int r=0;r<3;++r)
+            for (int c=0;c<STATE_DIM;++c)
+                P_rows_3_5[r*STATE_DIM + c] = P[IDX(3 + r,c)];
+
+        double KH2[STATE_DIM * STATE_DIM];
+        mat_mult(STATE_DIM, 3, STATE_DIM, Kvel, P_rows_3_5, KH2);
+        for (int i=0;i<P_DIM;++i) P[i]-=KH2[i];
+
+        double KRvel[STATE_DIM * 3];
+        mat_mult(STATE_DIM, 3, 3, Kvel, Rvel, KRvel);
+        double Ktvel[3 * STATE_DIM];
+        for (int r=0;r<3;++r)
+            for (int c=0;c<STATE_DIM;++c)
+                Ktvel[r*STATE_DIM + c]=Kvel[c*3 + r];
+        double KRKTvel[STATE_DIM * STATE_DIM];
+        mat_mult(STATE_DIM,3,STATE_DIM,KRvel,Ktvel,KRKTvel);
+        for (int i=0;i<P_DIM;++i) P[i]+=KRKTvel[i];
+
+        for (int r=0;r<STATE_DIM;++r)
+            for (int c=r+1;c<STATE_DIM;++c){
+                double avg=0.5*(P[IDX(r,c)]+P[IDX(c,r)]);
+                P[IDX(r,c)]=P[IDX(c,r)]=avg;
             }
-            /* Apply state corrections */
-            for (int i=0;i<3;++i)
-                x->p[i] += dxv[i];
-            for (int i=0;i<3;++i)
-                x->v[i] += dxv[3+i];
-
-            /* small-angle orientation update using dxv[6..8] */
-            double dtheta2[3] = { dxv[6], dxv[7], dxv[8] };
-            double qd2[4];
-
-            qd2[0] = 1.0; qd2[1] = 0.5*dtheta2[0]; qd2[2] = 0.5*dtheta2[1]; qd2[3] = 0.5*dtheta2[2];
-            double qd2n = sqrt(qd2[0]*qd2[0]+qd2[1]*qd2[1]+qd2[2]*qd2[2]+qd2[3]*qd2[3]);
-
-            if (qd2n>0)
-            {
-                qd2[0]/=qd2n;
-                qd2[1]/=qd2n;
-                qd2[2]/=qd2n;
-                qd2[3]/=qd2n;
-            }
-
-            double qnew2[4];
-            qnew2[0] = qd2[0]*x->q[0] - qd2[1]*x->q[1] - qd2[2]*x->q[2] - qd2[3]*x->q[3];
-            qnew2[1] = qd2[0]*x->q[1] + qd2[1]*x->q[0] + qd2[2]*x->q[3] - qd2[3]*x->q[2];
-            qnew2[2] = qd2[0]*x->q[2] - qd2[1]*x->q[3] + qd2[2]*x->q[0] + qd2[3]*x->q[1];
-            qnew2[3] = qd2[0]*x->q[3] + qd2[1]*x->q[2] - qd2[2]*x->q[1] + qd2[3]*x->q[0];
-            double n2 = sqrt(qnew2[0]*qnew2[0]+qnew2[1]*qnew2[1]+qnew2[2]*qnew2[2]+qnew2[3]*qnew2[3]);
-
-            if (n2>0)
-            {
-                x->q[0]=qnew2[0]/n2;
-                x->q[1]=qnew2[1]/n2;
-                x->q[2]=qnew2[2]/n2;
-                x->q[3]=qnew2[3]/n2;
-            }
-
-            for (int i=0;i<3;++i)
-                x->bg[i] += dxv[9+i];
-            for (int i=0;i<3;++i)
-                x->ba[i] += dxv[12+i];
-
-            /* Covariance update analogous to position update */
-            double KH2[STATE_DIM * STATE_DIM];
-            double P_rows_3_5[3 * STATE_DIM];
-
-            for (int r=0;r<3;++r)
-                for (int c=0;c<STATE_DIM;++c)
-                    P_rows_3_5[r*STATE_DIM + c] = P[IDX(3 + r,c)];
-
-            mat_mult(STATE_DIM, 3, STATE_DIM, Kvel, P_rows_3_5, KH2);
-            for (int r=0;r<STATE_DIM;++r)
-                for (int c=0;c<STATE_DIM;++c)
-                    P[IDX(r,c)] -= KH2[r*STATE_DIM + c];
-
-            double KRvel[STATE_DIM*3];
-            mat_mult(STATE_DIM, 3, 3, Kvel, Rvel, KRvel);
-
-            double Ktvel[3*STATE_DIM];
-
-            for (int r=0;r<3;++r)
-                for (int c=0;c<STATE_DIM;++c)
-                    Ktvel[r*STATE_DIM + c] = Kvel[c*3 + r];
-
-            double KRKTvel[STATE_DIM * STATE_DIM];
-            mat_mult(STATE_DIM,3,STATE_DIM,KRvel,Ktvel,KRKTvel);
-
-            for (int i=0;i<STATE_DIM*STATE_DIM;++i)
-                P[i] += KRKTvel[i];
-
-            for (int r=0;r<STATE_DIM;++r)
-                for (int c=r+1;c<STATE_DIM;++c)
-                {
-                    double avg = 0.5*(P[IDX(r,c)] + P[IDX(c,r)]);
-                    P[IDX(r,c)] = avg; P[IDX(c,r)] = avg;
-                }
-        }
     }
 
     return 0;
 }
 
-/* end of GPS part*/
 
-void ekf_init(struct ekf_state *x, double P[P_DIM], double t0)
+
+/* end of GPS part*/
+void ekf_init(struct ekf_state *x, double P[P_DIM], double t0,
+              const double *init_pos_enu, const double *init_vel_enu)
 {
     x->t = t0;
-    x->p[0] = 0.0;
-    x->p[1] = 0.0;
-    x->p[2] = 0.0;
 
-    x->v[0] = 0.0;
-    x->v[1] = 0.0;
-    x->v[2] = 0.0;
+    /* --- Initialize position and velocity --- */
+    if (init_pos_enu) {
+        x->p[0] = init_pos_enu[0];
+        x->p[1] = init_pos_enu[1];
+        x->p[2] = init_pos_enu[2];
+    } else {
+        x->p[0] = x->p[1] = x->p[2] = 0.0;
+    }
 
+    if (init_vel_enu) {
+        x->v[0] = init_vel_enu[0];
+        x->v[1] = init_vel_enu[1];
+        x->v[2] = init_vel_enu[2];
+    } else {
+        x->v[0] = x->v[1] = x->v[2] = 0.0;
+    }
+
+    /* --- Orientation (identity quaternion) --- */
     x->q[0] = 1.0;
     x->q[1] = 0.0;
     x->q[2] = 0.0;
     x->q[3] = 0.0;
 
-    x->bg[0] = 0.0;
-    x->bg[1] = 0.0;
-    x->bg[2] = 0.0;
+    /* --- Biases (zero initial) --- */
+    memset(x->bg, 0, sizeof(x->bg));
+    memset(x->ba, 0, sizeof(x->ba));
 
-    x->ba[0] = 0.0;
-    x->ba[1] = 0.0;
-    x->ba[2] = 0.0;
+    /* --- Initialize covariance --- */
+    for (size_t i = 0; i < P_DIM; ++i)
+        P[i] = 0.0;
 
-    /* Zero P */
-    for (size_t i=0;i<P_DIM;++i)
-        P[i]=0.0;
+    /* Larger initial uncertainties to reduce early measurement rejection */
+    double ang_var = pow(1.0 * (M_PI / 180.0), 2);  // 1 deg^2 in rad^2
+    double bg_var = pow(1e-3, 2);
+    double ba_var = pow(1e-2, 2);
 
-    // Reasonable initial uncertainties
-    double ang_var = (1.0 * (M_PI/180.0))*(1.0 * (M_PI/180.0));  // 1 deg^2 in rad^2
-    double bg_var = (1e-3)*(1e-3);
-    double ba_var = (1e-2)*(1e-2);
+    /* Position: high uncertainty (100 m²) */
+    P[IDX(0,0)] = 100.0;
+    P[IDX(1,1)] = 100.0;
+    P[IDX(2,2)] = 100.0;
 
-    P[IDX(0,0)] = 1.0;      // position m^2
-    P[IDX(1,1)] = 1.0;
-    P[IDX(2,2)] = 1.0;
+    /* Velocity: moderately high (10 (m/s)²) */
+    P[IDX(3,3)] = 10.0;
+    P[IDX(4,4)] = 10.0;
+    P[IDX(5,5)] = 10.0;
 
-    P[IDX(3,3)] = 0.1;      // velocity (m/s)^2
-    P[IDX(4,4)] = 0.1;
-    P[IDX(5,5)] = 0.1;
-
+    /* Orientation */
     P[IDX(6,6)] = ang_var;
     P[IDX(7,7)] = ang_var;
     P[IDX(8,8)] = ang_var;
 
-    
+    /* Biases */
     P[IDX(9,9)]   = bg_var;
     P[IDX(10,10)] = bg_var;
     P[IDX(11,11)] = bg_var;

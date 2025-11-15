@@ -4,32 +4,86 @@
 #include <stdio.h>
 
 #include "../include/multi_fuse.h"
+#include "mathlib/mathlib.h"
 
-/* minimal 3x3 inverse (row-major). returns 0 on success, -1 singular */
-static int mat_inv_3x3(const double *A, double *Ainv)
+/* --- New helpers for robust weighting --- */
+
+static void component_median(double vals[][3], int n, double out[3])
 {
-    double a=A[0], b=A[1], c=A[2],
-           d=A[3], e=A[4], f=A[5],
-           g=A[6], h=A[7], i=A[8];
-    double det = a*(e*i - f*h) - b*(d*i - f*g) + c*(d*h - e*g);
-    if (fabs(det) < 1e-18) return -1; /* treat very small det as singular */
-    double invdet = 1.0 / det;
+    for (int j = 0; j < 3; ++j)
+    {
+        double tmp[32];
+        for (int i = 0; i < n; ++i)
+            tmp[i] = vals[i][j];
 
-    /* adjugate / transpose of cofactor matrix (row-major) */
-    Ainv[0] =  (e*i - f*h) * invdet;
-    Ainv[1] = -(b*i - c*h) * invdet;
-    Ainv[2] =  (b*f - c*e) * invdet;
+        // Simple insertion sort
+        for (int a = 1; a < n; ++a)
+        {
+            double v = tmp[a];
+            int b = a - 1;
+            while (b >= 0 && tmp[b] > v)
+            {
+                tmp[b + 1] = tmp[b];
+                b--;
+            }
+            tmp[b + 1] = v;
+        }
 
-    Ainv[3] = -(d*i - f*g) * invdet;
-    Ainv[4] =  (a*i - c*g) * invdet;
-    Ainv[5] = -(a*f - c*d) * invdet;
-
-    Ainv[6] =  (d*h - e*g) * invdet;
-    Ainv[7] = -(a*h - b*g) * invdet;
-    Ainv[8] =  (a*e - b*d) * invdet;
-
-    return 0;
+        if (n % 2)
+            out[j] = tmp[n / 2];
+        else
+            out[j] = 0.5 * (tmp[n / 2 - 1] + tmp[n / 2]);
+    }
 }
+
+static void component_mad(double vals[][3], int n, const double med[3], double out[3])
+{
+    for (int j = 0; j < 3; ++j)
+    {
+        double dev[32];
+        for (int i = 0; i < n; ++i)
+            dev[i] = fabs(vals[i][j] - med[j]);
+
+        // Sort deviations
+        for (int a = 1; a < n; ++a)
+        {
+            double v = dev[a];
+            int b = a - 1;
+            while (b >= 0 && dev[b] > v)
+            {
+                dev[b + 1] = dev[b];
+                b--;
+            }
+            dev[b + 1] = v;
+        }
+
+        if (n % 2)
+            out[j] = dev[n / 2];
+        else
+            out[j] = 0.5 * (dev[n / 2 - 1] + dev[n / 2]);
+
+        out[j] *= 1.4826; // normalize to Gaussian scale
+        if (out[j] < 1e-6)
+            out[j] = 1e-6;
+    }
+}
+
+static double compute_robust_alpha(const double z[3], const double med[3], const double mad[3], double k)
+{
+    double norm = 0.0;
+    for (int j = 0; j < 3; ++j)
+    {
+        double zscore = (z[j] - med[j]) / (k * mad[j]);
+        norm += zscore * zscore;
+    }
+    norm = sqrt(norm);
+    double alpha = exp(-0.5 * norm * norm);
+    if (alpha < 0.05)
+        alpha = 0.05;
+    return alpha;
+}
+
+
 
 /* Multiply (3x3)*(3x1) -> out (3) */
 static void mat3_vec(const double *A, const double *v, double *out)
@@ -117,131 +171,136 @@ static int next_time_gps(struct gps_node **heads, int N, double *tmin)
     return 1;
 }
 
-/* fuse IMU lists */
+
 struct fused_imu *fuse_imus(struct imu_node **imu_heads, int N, double max_dt,
                             const double (*sensor_R_acc_diag)[3],
                             const double (*sensor_R_gyro_diag)[3])
 {
-    if (N <= 0 || imu_heads == NULL) return NULL;
+    if (N <= 0 || imu_heads == NULL)
+        return NULL;
 
-    struct imu_node **heads = malloc(sizeof(struct imu_node*) * N);
-    if (!heads) return NULL;
-    for (int i=0;i<N;++i) heads[i] = imu_heads[i];
+    struct imu_node **heads = malloc(sizeof(struct imu_node *) * N);
+    if (!heads)
+        return NULL;
+    for (int i = 0; i < N; ++i)
+        heads[i] = imu_heads[i];
 
     struct fused_imu *head = NULL, *tail = NULL;
 
-    /* iterate until all lists exhausted */
-    while (1) {
+    while (1)
+    {
         double tmin;
-        if (!next_time_imu(heads, N, &tmin)) break;
+        if (!next_time_imu(heads, N, &tmin))
+            break;
 
-        /* collect samples from sensors within [tmin, tmin + max_dt] */
-        double sumW_acc[9] = {0}, sumWv_acc[3] = {0};
-        double sumW_gyro[9] = {0}, sumWv_gyro[3] = {0};
+        /* Gather valid samples within window */
+        double acc_vals[32][3];
+        double gyro_vals[32][3];
+        int used_idx[32];
         int count = 0;
 
-        /* collect raw samples and covariances */
-        for (int i=0;i<N;++i) {
-            if (!heads[i]) continue;
+        for (int i = 0; i < N; ++i)
+        {
+            if (!heads[i])
+                continue;
             double dt = fabs(heads[i]->s.t - tmin);
-            if (dt <= max_dt) {
-                /* build covariances */
-                double Racc[9], Rgyro[9];
-                if (sensor_R_acc_diag) {
-                    build_diag3(sensor_R_acc_diag[i], Racc);
-                } else {
-                    /* default small covariance */
-                    double d[3] = {0.1, 0.1, 0.1};
-                    build_diag3(d, Racc);
-                }
-                if (sensor_R_gyro_diag) {
-                    build_diag3(sensor_R_gyro_diag[i], Rgyro);
-                } else {
-                    double d2[3] = {1e-3, 1e-3, 1e-3};
-                    build_diag3(d2, Rgyro);
-                }
-
-                /* Regularize R to avoid exact singularities */
-                const double eps = 1e-12;
-                Racc[0] += eps; Racc[4] += eps; Racc[8] += eps;
-                Rgyro[0] += eps; Rgyro[4] += eps; Rgyro[8] += eps;
-
-                /* compute W = R^-1 (weight) robustly */
-                double Wacc[9], Wgyro[9];
-                if (mat_inv_3x3(Racc, Wacc) != 0) {
-                    /* singular fallback: build diagonal inverse (safe) */
-                    for (int k=0;k<9;++k) Wacc[k]=0.0;
-                    if (Racc[0] > 1e-300) Wacc[0] = 1.0 / Racc[0];
-                    if (Racc[4] > 1e-300) Wacc[4] = 1.0 / Racc[4];
-                    if (Racc[8] > 1e-300) Wacc[8] = 1.0 / Racc[8];
-                }
-                if (mat_inv_3x3(Rgyro, Wgyro) != 0) {
-                    for (int k=0;k<9;++k) Wgyro[k]=0.0;
-                    if (Rgyro[0] > 1e-300) Wgyro[0] = 1.0 / Rgyro[0];
-                    if (Rgyro[4] > 1e-300) Wgyro[4] = 1.0 / Rgyro[4];
-                    if (Rgyro[8] > 1e-300) Wgyro[8] = 1.0 / Rgyro[8];
-                }
-
-                double acc_vec[3] = { heads[i]->s.ax, heads[i]->s.ay, heads[i]->s.az };
-                double gyro_vec[3] = { heads[i]->s.wx, heads[i]->s.wy, heads[i]->s.wz };
-
-                accumulate_weighted(Wacc, acc_vec, sumW_acc, sumWv_acc);
-                accumulate_weighted(Wgyro, gyro_vec, sumW_gyro, sumWv_gyro);
-                count++;
-
-                /* advance this head (consume this sample) */
-                heads[i] = heads[i]->next;
-                /* also advance original imu_heads if it's pointing into the same node */
-                if (imu_heads[i] && imu_heads[i]->s.t == tmin) imu_heads[i] = imu_heads[i]->next;
+            if (dt <= max_dt)
+            {
+                acc_vals[count][0] = heads[i]->s.ax;
+                acc_vals[count][1] = heads[i]->s.ay;
+                acc_vals[count][2] = heads[i]->s.az;
+                gyro_vals[count][0] = heads[i]->s.wx;
+                gyro_vals[count][1] = heads[i]->s.wy;
+                gyro_vals[count][2] = heads[i]->s.wz;
+                used_idx[count++] = i;
             }
         }
 
-        if (count == 0) {
-            /* no sample matched; advance all heads that equal tmin to avoid infinite loop */
-            for (int i=0;i<N;++i) {
-                if (heads[i] && fabs(heads[i]->s.t - tmin) < 1e-15) {
-                    heads[i] = heads[i]->next;
-                }
-                if (imu_heads[i] && fabs(imu_heads[i]->s.t - tmin) < 1e-15) {
-                    imu_heads[i] = imu_heads[i]->next;
-                }
+        if (count == 0)
+            break;
+
+        /* Robust statistics */
+        double med_acc[3], mad_acc[3], med_gyro[3], mad_gyro[3];
+        component_median(acc_vals, count, med_acc);
+        component_median(gyro_vals, count, med_gyro);
+        component_mad(acc_vals, count, med_acc, mad_acc);
+        component_mad(gyro_vals, count, med_gyro, mad_gyro);
+
+        double sumW_acc[9] = {0}, sumWv_acc[3] = {0};
+        double sumW_gyro[9] = {0}, sumWv_gyro[3] = {0};
+
+        /* Accumulate with robust weights */
+        const double k = 3.0;
+
+        for (int j = 0; j < count; ++j)
+        {
+            int i = used_idx[j];
+            double acc_vec[3] = {acc_vals[j][0], acc_vals[j][1], acc_vals[j][2]};
+            double gyro_vec[3] = {gyro_vals[j][0], gyro_vals[j][1], gyro_vals[j][2]};
+
+            double alpha_acc = compute_robust_alpha(acc_vec, med_acc, mad_acc, k);
+            double alpha_gyro = compute_robust_alpha(gyro_vec, med_gyro, mad_gyro, k);
+
+            double Racc[9], Rgyro[9];
+            if (sensor_R_acc_diag)
+                build_diag3(sensor_R_acc_diag[i], Racc);
+            else
+            {
+                double d[3] = {0.1, 0.1, 0.1};
+                build_diag3(d, Racc);
             }
-            continue;
+            if (sensor_R_gyro_diag)
+                build_diag3(sensor_R_gyro_diag[i], Rgyro);
+            else
+            {
+                double d[3] = {1e-3, 1e-3, 1e-3};
+                build_diag3(d, Rgyro);
+            }
+
+            double Wacc[9], Wgyro[9];
+            mat_inverse_3x3(Racc, Wacc);
+            mat_inverse_3x3(Rgyro, Wgyro);
+
+            for (int k = 0; k < 9; ++k)
+            {
+                Wacc[k] *= alpha_acc;
+                Wgyro[k] *= alpha_gyro;
+            }
+
+            accumulate_weighted(Wacc, acc_vec, sumW_acc, sumWv_acc);
+            accumulate_weighted(Wgyro, gyro_vec, sumW_gyro, sumWv_gyro);
+
+            heads[i] = heads[i]->next;
+            if (imu_heads[i] && imu_heads[i]->s.t == tmin)
+                imu_heads[i] = imu_heads[i]->next;
         }
 
-        /* compute fused covariances and fused vectors: Rfused = inv(sumW), zfused = Rfused * sumWv */
+        /* Fuse */
         double Racc_fused[9], Rgyro_fused[9];
+        if (mat_inverse_3x3(sumW_acc, Racc_fused) != 0)
+            build_diag3((double[3]){1, 1, 1}, Racc_fused);
+        if (mat_inverse_3x3(sumW_gyro, Rgyro_fused) != 0)
+            build_diag3((double[3]){1, 1, 1}, Rgyro_fused);
 
-        /* regularize sumW before inversion as well */
-        const double inv_eps = 1e-12;
-        sumW_acc[0] += inv_eps; sumW_acc[4] += inv_eps; sumW_acc[8] += inv_eps;
-        sumW_gyro[0] += inv_eps; sumW_gyro[4] += inv_eps; sumW_gyro[8] += inv_eps;
-
-        if (mat_inv_3x3(sumW_acc, Racc_fused) != 0) {
-            /* fallback: use inverse of diagonal elements */
-            double diag[3] = {1.0/(sumW_acc[0]+1e-18), 1.0/(sumW_acc[4]+1e-18), 1.0/(sumW_acc[8]+1e-18)};
-            build_diag3(diag, Racc_fused);
-        }
-        if (mat_inv_3x3(sumW_gyro, Rgyro_fused) != 0) {
-            double diag[3] = {1.0/(sumW_gyro[0]+1e-18), 1.0/(sumW_gyro[4]+1e-18), 1.0/(sumW_gyro[8]+1e-18)};
-            build_diag3(diag, Rgyro_fused);
-        }
-
-        /* compute zfused = Rfused * sumWv */
         double zacc_fused[3], zgyro_fused[3];
         mat3_vec(Racc_fused, sumWv_acc, zacc_fused);
         mat3_vec(Rgyro_fused, sumWv_gyro, zgyro_fused);
 
-        /* create fused node */
         struct fused_imu *node = malloc(sizeof(*node));
-        if (!node) break;
-        memset(node, 0, sizeof(*node)); /* ensure deterministic initial state */
+        if (!node)
+            break;
+        memset(node, 0, sizeof(*node));
         node->t = tmin;
-        node->ax = zacc_fused[0]; node->ay = zacc_fused[1]; node->az = zacc_fused[2];
-        node->gx = zgyro_fused[0]; node->gy = zgyro_fused[1]; node->gz = zgyro_fused[2];
+        node->ax = zacc_fused[0];
+        node->ay = zacc_fused[1];
+        node->az = zacc_fused[2];
+        node->gx = zgyro_fused[0];
+        node->gy = zgyro_fused[1];
+        node->gz = zgyro_fused[2];
         memcpy(node->P_acc, Racc_fused, sizeof(node->P_acc));
         memcpy(node->P_gyro, Rgyro_fused, sizeof(node->P_gyro));
         node->n_used = count;
+
         append_fused_imu(&head, &tail, node);
     }
 
@@ -249,111 +308,138 @@ struct fused_imu *fuse_imus(struct imu_node **imu_heads, int N, double max_dt,
     return head;
 }
 
-/* fuse gps lists — similar logic but uses lat/lon/alt and velocities; we simply average with weights on (lat,lon,alt) components (not converting to ENU here) */
 struct fused_gps *fuse_gps(struct gps_node **gps_heads, int N, double max_dt,
                            const double (*sensor_R_pos_diag)[3],
                            const double (*sensor_R_vel_diag)[3])
 {
-    if (N <= 0 || gps_heads == NULL) return NULL;
+    if (N <= 0 || gps_heads == NULL)
+        return NULL;
 
-    struct gps_node **heads = malloc(sizeof(struct gps_node*) * N);
-    if (!heads) return NULL;
-    for (int i=0;i<N;++i) heads[i] = gps_heads[i];
+    struct gps_node **heads = malloc(sizeof(struct gps_node *) * N);
+    if (!heads)
+        return NULL;
+    for (int i = 0; i < N; ++i)
+        heads[i] = gps_heads[i];
 
     struct fused_gps *head = NULL, *tail = NULL;
 
-    while (1) {
+    while (1)
+    {
         double tmin;
-        if (!next_time_gps(heads, N, &tmin)) break;
+        if (!next_time_gps(heads, N, &tmin))
+            break;
+
+        double pos_vals[32][3];
+        double vel_vals[32][3];
+        int used_idx[32];
+        int count = 0;
+
+        for (int i = 0; i < N; ++i)
+        {
+            if (!heads[i])
+                continue;
+            double dt = fabs(heads[i]->s.t - tmin);
+            if (dt <= max_dt)
+            {
+                pos_vals[count][0] = heads[i]->s.lat;
+                pos_vals[count][1] = heads[i]->s.lon;
+                pos_vals[count][2] = heads[i]->s.alt;
+                vel_vals[count][0] = heads[i]->s.vn;
+                vel_vals[count][1] = heads[i]->s.ve;
+                vel_vals[count][2] = heads[i]->s.vu;
+                used_idx[count++] = i;
+            }
+        }
+
+        if (count == 0)
+            break;
+
+        double med_pos[3], mad_pos[3], med_vel[3], mad_vel[3];
+        component_median(pos_vals, count, med_pos);
+        component_median(vel_vals, count, med_vel);
+        component_mad(pos_vals, count, med_pos, mad_pos);
+        component_mad(vel_vals, count, med_vel, mad_vel);
 
         double sumW_pos[9] = {0}, sumWv_pos[3] = {0};
         double sumW_vel[9] = {0}, sumWv_vel[3] = {0};
-        int count = 0;
 
-        for (int i=0;i<N;++i) {
-            if (!heads[i]) continue;
-            double dt = fabs(heads[i]->s.t - tmin);
-            if (dt <= max_dt) {
-                double Rpos[9], Rvel[9];
-                if (sensor_R_pos_diag) build_diag3(sensor_R_pos_diag[i], Rpos);
-                else { double d[3]={2.0,2.0,5.0}; build_diag3(d,Rpos); }
-                if (sensor_R_vel_diag) build_diag3(sensor_R_vel_diag[i], Rvel);
-                else { double d[3]={0.5,0.5,0.5}; build_diag3(d,Rvel); }
+        const double k = 3.0;
+        for (int j = 0; j < count; ++j)
+        {
+            int i = used_idx[j];
+            double pos_vec[3] = {pos_vals[j][0], pos_vals[j][1], pos_vals[j][2]};
+            double vel_vec[3] = {vel_vals[j][0], vel_vals[j][1], vel_vals[j][2]};
 
-                /* Regularize */
-                const double eps = 1e-12;
-                Rpos[0] += eps; Rpos[4] += eps; Rpos[8] += eps;
-                Rvel[0] += eps; Rvel[4] += eps; Rvel[8] += eps;
+            double alpha_pos = compute_robust_alpha(pos_vec, med_pos, mad_pos, k);
+            double alpha_vel = compute_robust_alpha(vel_vec, med_vel, mad_vel, k);
 
-                double Wpos[9], Wvel[9];
-                if (mat_inv_3x3(Rpos, Wpos) != 0) {
-                    for (int k=0;k<9;++k) Wpos[k]=0.0;
-                    if (Rpos[0] > 1e-300) Wpos[0] = 1.0 / Rpos[0];
-                    if (Rpos[4] > 1e-300) Wpos[4] = 1.0 / Rpos[4];
-                    if (Rpos[8] > 1e-300) Wpos[8] = 1.0 / Rpos[8];
-                }
-                if (mat_inv_3x3(Rvel, Wvel) != 0) {
-                    for (int k=0;k<9;++k) Wvel[k]=0.0;
-                    if (Rvel[0] > 1e-300) Wvel[0] = 1.0 / Rvel[0];
-                    if (Rvel[4] > 1e-300) Wvel[4] = 1.0 / Rvel[4];
-                    if (Rvel[8] > 1e-300) Wvel[8] = 1.0 / Rvel[8];
-                }
-
-                double pos_vec[3] = { heads[i]->s.lat, heads[i]->s.lon, heads[i]->s.alt };
-                double vel_vec[3] = { heads[i]->s.vn, heads[i]->s.ve, heads[i]->s.vu };
-                accumulate_weighted(Wpos, pos_vec, sumW_pos, sumWv_pos);
-                accumulate_weighted(Wvel, vel_vec, sumW_vel, sumWv_vel);
-                count++;
-
-                heads[i] = heads[i]->next;
-                if (gps_heads[i] && gps_heads[i]->s.t == tmin) gps_heads[i] = gps_heads[i]->next;
+            double Rpos[9], Rvel[9];
+            if (sensor_R_pos_diag)
+                build_diag3(sensor_R_pos_diag[i], Rpos);
+            else
+            {
+                double d[3] = {2.0, 2.0, 5.0};
+                build_diag3(d, Rpos);
             }
-        }
-
-        if (count == 0) {
-            /* advance heads matching tmin to avoid infinite loop */
-            for (int i=0;i<N;++i) {
-                if (heads[i] && fabs(heads[i]->s.t - tmin) < 1e-15) heads[i] = heads[i]->next;
-                if (gps_heads[i] && fabs(gps_heads[i]->s.t - tmin) < 1e-15) gps_heads[i] = gps_heads[i]->next;
+            if (sensor_R_vel_diag)
+                build_diag3(sensor_R_vel_diag[i], Rvel);
+            else
+            {
+                double d[3] = {0.5, 0.5, 0.5};
+                build_diag3(d, Rvel);
             }
-            continue;
+
+            double Wpos[9], Wvel[9];
+            mat_inverse_3x3(Rpos, Wpos);
+            mat_inverse_3x3(Rvel, Wvel);
+
+            for (int k = 0; k < 9; ++k)
+            {
+                Wpos[k] *= alpha_pos;
+                Wvel[k] *= alpha_vel;
+            }
+
+            accumulate_weighted(Wpos, pos_vec, sumW_pos, sumWv_pos);
+            accumulate_weighted(Wvel, vel_vec, sumW_vel, sumWv_vel);
+
+            heads[i] = heads[i]->next;
+            if (gps_heads[i] && gps_heads[i]->s.t == tmin)
+                gps_heads[i] = gps_heads[i]->next;
         }
 
         double Rpos_fused[9], Rvel_fused[9];
-
-        /* regularize before inversion */
-        const double inv_eps = 1e-12;
-        sumW_pos[0] += inv_eps; sumW_pos[4] += inv_eps; sumW_pos[8] += inv_eps;
-        sumW_vel[0] += inv_eps; sumW_vel[4] += inv_eps; sumW_vel[8] += inv_eps;
-
-        if (mat_inv_3x3(sumW_pos, Rpos_fused) != 0) {
-            double diag[3] = {1.0/(sumW_pos[0]+1e-18), 1.0/(sumW_pos[4]+1e-18), 1.0/(sumW_pos[8]+1e-18)};
-            build_diag3(diag, Rpos_fused);
-        }
-        if (mat_inv_3x3(sumW_vel, Rvel_fused) != 0) {
-            double diag[3] = {1.0/(sumW_vel[0]+1e-18), 1.0/(sumW_vel[4]+1e-18), 1.0/(sumW_vel[8]+1e-18)};
-            build_diag3(diag, Rvel_fused);
-        }
+        if (mat_inverse_3x3(sumW_pos, Rpos_fused) != 0)
+            build_diag3((double[3]){1, 1, 1}, Rpos_fused);
+        if (mat_inverse_3x3(sumW_vel, Rvel_fused) != 0)
+            build_diag3((double[3]){1, 1, 1}, Rvel_fused);
 
         double pos_fused[3], vel_fused[3];
         mat3_vec(Rpos_fused, sumWv_pos, pos_fused);
         mat3_vec(Rvel_fused, sumWv_vel, vel_fused);
 
         struct fused_gps *node = malloc(sizeof(*node));
-        if (!node) break;
+        if (!node)
+            break;
         memset(node, 0, sizeof(*node));
         node->t = tmin;
-        node->lat = pos_fused[0]; node->lon = pos_fused[1]; node->alt = pos_fused[2];
-        node->vn = vel_fused[0]; node->ve = vel_fused[1]; node->vu = vel_fused[2];
+        node->lat = pos_fused[0];
+        node->lon = pos_fused[1];
+        node->alt = pos_fused[2];
+        node->vn = vel_fused[0];
+        node->ve = vel_fused[1];
+        node->vu = vel_fused[2];
         memcpy(node->P_pos, Rpos_fused, sizeof(node->P_pos));
         memcpy(node->P_vel, Rvel_fused, sizeof(node->P_vel));
         node->n_used = count;
+
         append_fused_gps(&head, &tail, node);
     }
 
     free(heads);
     return head;
 }
+
+
 
 /* free helpers */
 void free_fused_imu_list(struct fused_imu *h)

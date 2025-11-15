@@ -7,6 +7,8 @@
 #define STATE_DIM 15
 #define P_DIM (STATE_DIM * STATE_DIM)
 #define IDX(r,c) ((r)*STATE_DIM + (c))
+#define MAHALANOBIS_THRESH_POS 16.27 
+#define MAHALANOBIS_THRESH_VEL 16.27
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -23,8 +25,8 @@ struct ekf_state
 };
 
 /* Initialize EKF state and covariance P (row-major 15x15) */
-void ekf_init(struct ekf_state *x, double P[P_DIM], double t0);
-
+void ekf_init(struct ekf_state *x, double P[P_DIM], double t0,
+              const double *init_pos_enu, const double *init_vel_enu);
 /*
  * Propagate EKF with a single IMU sample over dt seconds.
  * imu: bias/measurement fields expected in sensors.h

@@ -1,2 +1,0 @@
-run_id,timestamp,n_corrupt,error_rate,mean_maha_pos,max_maha_pos,mean_maha_vel,max_maha_vel,reject_ratio,rmse_pos,rmse_vel,mean_scale_R_gps,mean_scale_Q,mean_scale_gate
-0001,2025-11-09 22:53:22,0,0.0,2872.317417859524,405980.41121,1331.6802527023808,11316.266314,0.6904761904761905,628.343471847741,52.52571930368819,1.0142465523809525,1.0,0.9916670928571428

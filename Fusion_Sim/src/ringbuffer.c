@@ -35,7 +35,7 @@ int rb_pop(struct ringbuffer *rb, void *elem)
     memcpy(elem, &rb->buffer[rb->tail * rb->elem_size], rb->elem_size);
     rb->tail = (rb->tail + 1) % rb->capacity;
     rb->count--;
-    return 0;
+    return (0);
 }
 
 int rb_peek(const struct ringbuffer *rb, void *elem)
@@ -49,7 +49,7 @@ int rb_peek(const struct ringbuffer *rb, void *elem)
 
 int rb_is_empty(const struct ringbuffer *rb)
 {
-    return rb->count == 0;
+    return (rb->count == 0);
 }
 
 int rb_is_full(const struct ringbuffer *rb)

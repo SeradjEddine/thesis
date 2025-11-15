@@ -6,7 +6,7 @@ AR      := ar
 ARFLAGS := rcs
 
 # ---- Source structure ----------------------------------------------------- #
-SRC := vec.c mat.c quat.c ekf_utils.c
+SRC := vec.c mat.c quat.c
 OBJ := $(SRC:.c=.o)
 LIB := mathlib.a
 

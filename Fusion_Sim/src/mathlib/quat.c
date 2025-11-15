@@ -4,9 +4,12 @@
 /* ===== Quaternion implementation ===== */
 
 /* Normalize quaternion to unit length */
-void quat_normalize(double q[4]) {
+void quat_normalize(double q[4])
+{
     double norm = sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3]);
-    if (norm > 1e-12) {
+
+    if (norm > 1e-12)
+    {
         q[0] /= norm;
         q[1] /= norm;
         q[2] /= norm;
@@ -15,7 +18,8 @@ void quat_normalize(double q[4]) {
 }
 
 /* Quaternion multiplication: out = q1 * q2 */
-void quat_mul(const double q1[4], const double q2[4], double out[4]) {
+void quat_mul(const double q1[4], const double q2[4], double out[4])
+{
     out[0] = q1[0]*q2[0] - q1[1]*q2[1] - q1[2]*q2[2] - q1[3]*q2[3];
     out[1] = q1[0]*q2[1] + q1[1]*q2[0] + q1[2]*q2[3] - q1[3]*q2[2];
     out[2] = q1[0]*q2[2] - q1[1]*q2[3] + q1[2]*q2[0] + q1[3]*q2[1];
@@ -23,7 +27,8 @@ void quat_mul(const double q1[4], const double q2[4], double out[4]) {
 }
 
 /* Rotate vector v by quaternion q: out = q * (0,v) * q^-1 */
-void quat_rotate_vec(const double q[4], const double v[3], double out[3]) {
+void quat_rotate_vec(const double q[4], const double v[3], double out[3])
+{
     /* Convert v to quaternion form */
     double vq[4] = {0, v[0], v[1], v[2]};
     double q_conj[4] = {q[0], -q[1], -q[2], -q[3]};

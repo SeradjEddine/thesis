@@ -64,7 +64,7 @@ mahal_vel_db = 10 * np.log10(np.clip(gps_df["mahalanobis_vel"].to_numpy(), 1e-12
 
 fig = plt.figure(figsize=(10,4))
 plt.plot(gps_df["t"], mahal_pos_db, label="Position Mahalanobis (dB)")
-plt.axhline(10*np.log10(16.27), color="r", linestyle="--", label="3σ threshold (dB)")
+plt.axhline(10*np.log10(11.34), color="r", linestyle="--", label="3σ threshold (dB)")
 plt.xlabel("Time (s)")
 plt.ylabel("dB")
 plt.title("GPS Position Mahalanobis Distance (dB)")

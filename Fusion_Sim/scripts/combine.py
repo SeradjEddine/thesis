@@ -221,7 +221,7 @@ def main():
     for nc, df_list in sorted(all_rows_by_corrupt.items()):
         combined = pd.concat(df_list, ignore_index=True)
         outp = OUT_DIR / f"combined_n_corrupt_{nc}.csv"
-        combined.to_csv(outp, index=False)
+        combined.to_csv(outp, index=False, float_format="%.6f")
         print(f"[OK] Saved {outp} ({len(combined)} rows)")
 
     # unknowns

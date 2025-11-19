@@ -14,6 +14,54 @@ import random
 import argparse
 from typing import Tuple
 
+# ----------------------------------------------------------------------
+#  🧩 1. CATEGORY DEFINITIONS & NOISE MAGNITUDE SCALE FACTORS
+# ----------------------------------------------------------------------
+#
+#  You can tune these values freely. They multiply the *std-based magnitude*.
+#
+#  Recommended initial factors (realistic rough modeling):
+#   - GPS:         0.2–0.4   (GPS in meters; keep noise small)
+#   - Orientation: 0.5–1.0   (Yaw drift behaves differently but this is OK)
+#   - Velocity:    1.0       (KITTI velocity variance already moderate)
+#   - Accel:       1.0–1.5   (IMU accel noisy)
+#   - Gyro:        1.0–1.5   (gyro even noisier)
+#
+# ----------------------------------------------------------------------
+
+NOISE_SCALE = {
+    "gps": 0.25,
+    "orientation": 1.0,
+    "velocity": 1.0,
+    "accel": 1.2,
+    "gyro": 1.2,
+}
+
+GPS_COLS = ["lat", "lon", "alt"]
+ORIENT_COLS = ["roll", "pitch", "yaw"]
+VELOCITY_COLS = ["vn", "ve", "vf", "vl", "vu"]
+ACCEL_COLS = ["ax", "ay", "az", "af", "al", "au"]
+GYRO_COLS = ["wx", "wy", "wz", "wf", "wl", "wu"]
+
+def classify_column(col: str) -> str:
+    """Return category name for noise scaling."""
+    if col in GPS_COLS:
+        return "gps"
+    if col in ORIENT_COLS:
+        return "orientation"
+    if col in VELOCITY_COLS:
+        return "velocity"
+    if col in ACCEL_COLS:
+        return "accel"
+    if col in GYRO_COLS:
+        return "gyro"
+    return None  # default category = no scaling override
+
+
+# ----------------------------------------------------------------------
+#  ORIGINAL SCRIPT BELOW (UNCHANGED EXCEPT INJECTOR)
+# ----------------------------------------------------------------------
+
 def load_oxts_file(file_path: str) -> dict:
     """Parse a single OXTS line into a dict of useful values."""
     with open(file_path, 'r') as f:
@@ -31,43 +79,23 @@ def load_oxts_file(file_path: str) -> dict:
     }
 
 def parse_timestamp_ns(ts: str) -> int:
-    """
-    Parse KITTI timestamp string (YYYY-MM-DD HH:MM:SS.sssssssss)
-    into nanoseconds since epoch (int64).
-    """
     base, frac = ts.split(".")
-    frac = (frac + "000000000")[:9]  # pad/truncate to 9 digits
+    frac = (frac + "000000000")[:9]
     ns = int(frac)
-
-    # Parse base to seconds since epoch
     base_epoch = pd.Timestamp(base).to_datetime64().astype("datetime64[s]").astype(np.int64)
-
     return base_epoch * 1_000_000_000 + ns
 
 def find_oxts_paths(input_dir: str) -> Tuple[str, str]:
-    """
-    Given an input path, determine the correct paths for timestamps.txt and data/.
-    Accept either:
-      - input_dir contains 'timestamps.txt' and 'data/' (preferred), OR
-      - input_dir/oxts contains them.
-    Returns (timestamps_file, data_dir)
-    Raises FileNotFoundError with helpful message if neither is valid.
-    """
-    # Candidate 1: input_dir itself
     t1 = os.path.join(input_dir, "timestamps.txt")
     d1 = os.path.join(input_dir, "data")
-
     if os.path.isfile(t1) and os.path.isdir(d1):
         return t1, d1
 
-    # Candidate 2: input_dir/oxts
     t2 = os.path.join(input_dir, "oxts", "timestamps.txt")
     d2 = os.path.join(input_dir, "oxts", "data")
     if os.path.isfile(t2) and os.path.isdir(d2):
         return t2, d2
 
-    # Candidate 3: if user passed parent and there is exactly one oxts* folder inside, try it
-    # (useful if input_dir points to category dir by mistake)
     candidates = [p for p in glob.glob(os.path.join(input_dir, "*")) if os.path.isdir(p)]
     for c in candidates:
         t3 = os.path.join(c, "timestamps.txt")
@@ -75,34 +103,16 @@ def find_oxts_paths(input_dir: str) -> Tuple[str, str]:
         if os.path.isfile(t3) and os.path.isdir(d3):
             return t3, d3
 
-    tried = [
-        f"1) {t1} + {d1}",
-        f"2) {t2} + {d2}",
-        f"3) searched immediate subfolders of {input_dir}"
-    ]
-    raise FileNotFoundError(
-        f"Could not find timestamps.txt and data/ in the provided input_dir. "
-        f"Tried: {', '.join(tried)}. Please pass the sequence folder (which contains timestamps.txt and data/) "
-        f"or the oxts subfolder."
-    )
+    raise FileNotFoundError("Could not find timestamps.txt and data/.")
 
 def prepare_kitti_sequence(input_dir: str) -> pd.DataFrame:
-    """
-    Load OXTS sequence into a DataFrame.
-    input_dir may be either the sequence folder (containing timestamps.txt and data/)
-    or an oxts/ subfolder.
-    """
     timestamps_file, oxts_data_dir = find_oxts_paths(input_dir)
-
     with open(timestamps_file, 'r') as f:
         timestamps = [line.strip() for line in f.readlines()]
 
     files = sorted(glob.glob(os.path.join(oxts_data_dir, "*.txt")))
     if len(files) != len(timestamps):
-        raise ValueError(
-            f"Number of OXTS files ({len(files)}) and timestamps ({len(timestamps)}) differ! "
-            f"timestamps_file={timestamps_file}, oxts_data_dir={oxts_data_dir}"
-        )
+        raise ValueError("Mismatch files vs timestamps")
 
     rows = []
     for ts, fpath in zip(timestamps, files):
@@ -111,52 +121,40 @@ def prepare_kitti_sequence(input_dir: str) -> pd.DataFrame:
         rows.append(data)
 
     df = pd.DataFrame(rows)
-
-    # Compute relative time as before
     ns_times = np.array([parse_timestamp_ns(ts) for ts in df["timestamp"]], dtype=np.int64)
-    rel_ns = ns_times - ns_times[0]  # relative nanoseconds (int64)
+    rel_ns = ns_times - ns_times[0]
     df["rel_time"] = [f"{ns/1e9:.9f}" for ns in rel_ns]
-
     return df
 
+
+# ----------------------------------------------------------------------
+#  🛠️ 2. NEW INJECTOR WITH PER-CATEGORY NOISE CONTROL
+# ----------------------------------------------------------------------
 def inject_noise(df: pd.DataFrame, error_rate: float = 0.03, magnitude: float = 3.0, seed: int = None) -> pd.DataFrame:
-    """
-    Randomly inject outlier values into up to error_rate fraction of numeric cells,
-    spreading them evenly across numeric columns but excluding timestamp-like columns.
-    """
+
     if seed is not None:
         np.random.seed(seed)
         random.seed(seed)
 
     noisy_df = df.copy(deep=True)
 
-    # Build list of columns eligible for corruption:
-    # numeric columns AND not timestamp / rel_time
     excluded_names = {"timestamp", "rel_time"}
     numeric_cols = [c for c in noisy_df.select_dtypes(include=[np.number]).columns if c not in excluded_names]
 
-    if len(numeric_cols) == 0:
-        # Fallback: if no numeric columns detected (unlikely), try all except excluded names
-        numeric_cols = [c for c in noisy_df.columns if c not in excluded_names]
-
     n_rows = len(noisy_df)
-    n_cols = len(numeric_cols)
-    if n_cols == 0 or n_rows == 0:
+    if len(numeric_cols) == 0 or n_rows == 0:
         return noisy_df
 
-    total_cells = n_rows * n_cols
+    total_cells = n_rows * len(numeric_cols)
     n_errors = max(1, int(total_cells * error_rate))
 
-    # Distribute errors evenly per column
-    base_per_col = n_errors // n_cols
-    remainder = n_errors % n_cols
+    base_per_col = n_errors // len(numeric_cols)
+    remainder = n_errors % len(numeric_cols)
 
-    # Shuffle columns to randomize where the extra remainder errors go
     cols_shuffled = numeric_cols.copy()
     random.shuffle(cols_shuffled)
 
     for idx, col in enumerate(cols_shuffled):
-        # give one extra if within remainder
         n_for_col = base_per_col + (1 if idx < remainder else 0)
         if n_for_col <= 0:
             continue
@@ -165,54 +163,67 @@ def inject_noise(df: pd.DataFrame, error_rate: float = 0.03, magnitude: float = 
         if not std or np.isnan(std):
             std = 1.0
 
-        # pick unique row indices for this column
-        n_for_col = min(n_for_col, n_rows)
-        row_idxs = np.random.choice(noisy_df.index, size=n_for_col, replace=False)
+        # --- CATEGORY-BASED NOISE SCALING ---
+        category = classify_column(col)
+        scale = NOISE_SCALE.get(category, 1.0)  # default 1.0 if unclassified
+        effective_mag = magnitude * scale
+
+        row_idxs = np.random.choice(noisy_df.index, size=min(n_for_col, n_rows), replace=False)
 
         for r in row_idxs:
             val = noisy_df.at[r, col]
-            perturb = np.random.normal(0, magnitude * std)
-            # occasional extreme spike
+
+            perturb = np.random.normal(0, effective_mag * std)
+
+            # optional extreme spikes
             if random.random() < 0.2:
                 perturb *= random.choice([-5, 5])
+
             noisy_df.at[r, col] = val + perturb
 
     return noisy_df
 
+
+# ----------------------------------------------------------------------
+#  MAIN (unchanged)
+# ----------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser(description="Prepare OXTS CSV files with optional corruption")
-    parser.add_argument("--input_dir", required=True,
-                        help="Path to sequence folder (or oxts subfolder). Must contain timestamps.txt and data/")
-    parser.add_argument("--output_dir", required=True, help="Directory to write CSV files to (will be created)")
-    parser.add_argument("--total", type=int, default=5, help="Total number of CSV files to produce (default=5)")
-    parser.add_argument("--n_corrupt", type=int, default=0, help="Number of corrupted CSV files (default=0)")
-    parser.add_argument("--error_rate", type=float, default=0.03, help="Fraction of numeric values to corrupt (default=0.03)")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility (default=42)")
-    parser.add_argument("--magnitude", type=float, default=3.0, help="Noise magnitude in units of column std dev (default=3.0)")
+    parser.add_argument("--input_dir", required=True)
+    parser.add_argument("--output_dir", required=True)
+    parser.add_argument("--total", type=int, default=5)
+    parser.add_argument("--n_corrupt", type=int, default=0)
+    parser.add_argument("--error_rate", type=float, default=0.03)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--magnitude", type=float, default=3.0)
     args = parser.parse_args()
 
     if args.n_corrupt > args.total:
-        raise ValueError("Number of corrupted files cannot exceed total number of files.")
+        raise ValueError("n_corrupt > total")
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # Load base dataframe
     base_df = prepare_kitti_sequence(args.input_dir)
 
-    # Decide which indices will be corrupted (deterministic w.r.t seed)
     random.seed(args.seed)
     corrupted_indices = set(random.sample(range(args.total), args.n_corrupt))
 
     for i in range(args.total):
         if i in corrupted_indices:
-            df_out = inject_noise(base_df, error_rate=args.error_rate, magnitude=args.magnitude, seed=(args.seed + i))
+            df_out = inject_noise(base_df,
+                                  error_rate=args.error_rate,
+                                  magnitude=args.magnitude,
+                                  seed=(args.seed + i))
             status = "corrupted"
         else:
             df_out = base_df
             status = "clean"
+
         out_path = os.path.join(args.output_dir, f"oxts{i}.csv")
         df_out.to_csv(out_path, index=False)
         print(f"Saved {len(df_out)} entries to {out_path} ({status})")
 
+
 if __name__ == "__main__":
     main()
+

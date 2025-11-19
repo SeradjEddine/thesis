@@ -13,13 +13,13 @@ gps:
   bias_drift:
     enable: true
     probability: 0.015
-    bias_std: 1.5         # meters
+    bias_std: 0.5         # meters
     drift_per_sec: 0.1    # meters/sec
 
   jumps:
     enable: true
     probability: 0.002
-    magnitude: 30.0       # sudden meter jump
+    magnitude: 12.0       # sudden meter jump
     hold_duration: 1.0    # seconds to hold warped value
 
   dropout:

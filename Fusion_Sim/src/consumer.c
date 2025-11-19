@@ -27,7 +27,7 @@ struct timespec ts;
 static void create_directory_recursive(const char *path)
 {
     char tmp[PATH_MAX];
-    snprintf(tmp, sizeof(tmp), "%s", path);
+    snprintf(tmp, sizeof(tmp), "%s", path); 
 
     for (char *p = tmp + 1; *p; p++)
     {
@@ -59,7 +59,7 @@ void *consumer_thread(void *arg)
     struct gps_sample first_gps;
 
     while (rb_is_empty(cargs->imu_rb) || rb_is_empty(cargs->gps_rb))
-        usleep(1000);
+        usleep(100);
 
     rb_peek(cargs->imu_rb, &first_imu);
     rb_peek(cargs->gps_rb, &first_gps);
@@ -73,7 +73,7 @@ void *consumer_thread(void *arg)
     // Convert GPS position to ENU for initial position
     double pos0[3];
     latlon_to_enu(first_gps.lat, first_gps.lon, first_gps.alt, pos0);
-
+    
     // Convert NED velocities (vn, ve, vu) to ENU
     double vel0[3];
     vel0[0] = first_gps.ve; // East → x
@@ -92,6 +92,9 @@ void *consumer_thread(void *arg)
        ========================================== */
     char imu_path[PATH_MAX], gps_path[PATH_MAX], fuzzy_path[PATH_MAX];
     create_directory_recursive(cargs->output_dir);
+
+    
+
     snprintf(imu_path, sizeof(imu_path), "%s/imu_prop.csv", cargs->output_dir);
     snprintf(gps_path, sizeof(gps_path), "%s/gps_updates.csv", cargs->output_dir);
     snprintf(fuzzy_path, sizeof(fuzzy_path), "%s/fuzzy.csv", cargs->output_dir);
@@ -217,7 +220,7 @@ void *consumer_thread(void *arg)
             rb_is_empty(cargs->gps_rb))
             break;
 
-        usleep(1000);
+        usleep(100);
     }
 
     /* ==========================================

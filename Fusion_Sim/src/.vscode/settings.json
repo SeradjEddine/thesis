@@ -6,6 +6,7 @@
         "sensors.h": "c",
         "unistd.h": "c",
         "stdio.h": "c",
-        "ringbuffer.h": "c"
+        "ringbuffer.h": "c",
+        "stddef.h": "c"
     }
 }

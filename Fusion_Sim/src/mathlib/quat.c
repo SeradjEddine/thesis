@@ -80,10 +80,6 @@ void quat_from_omega(const double omega[3], double dt, double q_delta[4])
     }
 }
 
-/*
- * Convert quaternion (w,x,y,z) to row-major 3x3 rotation matrix.
- * R = R(q): world <- body (consistent with earlier code)
- */
 void quat_to_rotmat(const double q[4], double R[9])
 {
     double w = q[0], x = q[1], y = q[2], z = q[3];

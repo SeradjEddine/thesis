@@ -9,23 +9,19 @@ void *producer_thread(void *arg)
     struct producer_args *pargs = (struct producer_args *)arg;  
     uint8_t *base = (uint8_t *)pargs->data_array;
     void    *elem;
-    int     i = 0;
+    size_t     i = 0;
 
     while ( i < pargs->count)
     {
         elem = base + (i * pargs->elem_size);
 
         while (rb_push(pargs->rb, elem) != 0)
-            usleep(1000); // buffer full, wait and retry1 (ms)
+            usleep(100); // buffer full, wait and retry1 (ms)
 
-        usleep(pargs->interval_ms * 1000);  // simulates sensor update rate
+        usleep(pargs->interval_ms * 100);  // simulates sensor update rate
         i ++;
     }
-
-    write(1, "Producer finished: pushed ", 26);
-    write(1, &pargs->count, sizeof(int));
-    write(1, "elements\n", 9);
-
+    printf("Producer finished: pushed %zu elements\n", pargs->count);
     return (NULL);
 }
 

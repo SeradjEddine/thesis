@@ -42,25 +42,9 @@ struct gps_node {
     struct gps_node *next;
 };
 
-/* Optional: fused ground-truth pose for evaluation */
-struct groundtruth_sample {
-    double t;     // timestamp in seconds
-
-    // Local Cartesian position (e.g., ENU or KITTI frame)
-    double x;
-    double y;
-    double z;
-
-    // Orientation (Euler angles, radians)
-    double roll;
-    double pitch;
-    double yaw;
-};
-
-
 int sensor_reader(const char *filename,
                   struct imu_sample *imus, int max_imus,
                   struct gps_sample *gps, int max_gps);
 
-#endif // SENSORS_H
+#endif
 

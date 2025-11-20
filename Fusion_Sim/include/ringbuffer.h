@@ -4,7 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-struct ringbuffer {
+struct ringbuffer
+{
     uint8_t *buffer;     // pointer to storage
     size_t capacity;     // max number of elements
     size_t elem_size;    // size of each element in bytes
@@ -34,5 +35,5 @@ int rb_is_empty(const struct ringbuffer *rb);
 int rb_is_full(const struct ringbuffer *rb);
 size_t rb_size(const struct ringbuffer *rb);
 
-#endif // RINGBUFFER_H
+#endif
 

@@ -1,6 +1,7 @@
 {
     "files.associations": {
         "ringbuffer.h": "c",
-        "multi_fuse.h": "c"
+        "multi_fuse.h": "c",
+        "producer.h": "c"
     }
 }

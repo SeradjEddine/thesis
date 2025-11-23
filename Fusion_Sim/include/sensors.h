@@ -32,16 +32,6 @@ struct imu_sample {
     double wz;    // yaw rate   [rad/s]
 };
 
-struct imu_node {
-    struct imu_sample s;
-    struct imu_node *next;
-};
-
-struct gps_node { 
-    struct gps_sample s;
-    struct gps_node *next;
-};
-
 int sensor_reader(const char *filename,
                   struct imu_sample *imus, int max_imus,
                   struct gps_sample *gps, int max_gps);

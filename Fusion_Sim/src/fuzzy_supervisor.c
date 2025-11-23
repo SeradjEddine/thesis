@@ -1,220 +1,163 @@
 #include "../include/fuzzy_supervisor.h"
-#include <math.h>
 
-// Default parameter bounds
+static const double Q_INC_THRESHOLD = 0.25;
+
+static fuzzy_params_t Fparams; /*(user-supplied)*/
+static fuzzy_outputs_t last_out = { 1.0, 1.0, 1.0 };
+
 static const fuzzy_params_t default_params =
 {
+    /*Default parameter bounds (conservative)*/
     .min_scale_R = 0.6,
     .max_scale_R = 3.0,
     .min_scale_Q = 0.7,
     .max_scale_Q = 2.0,
     .min_scale_gate = 0.85,
     .max_scale_gate = 1.5,
-    .smoothing_alpha = 0.15
+    .smoothing_alpha = 0.85
 };
 
-// Internal state
-static fuzzy_params_t Fparams;
-static fuzzy_outputs_t last_out = {1.0, 1.0, 1.0};
-
-// left-shoulder: 1 up to b, then falls to 0 at c
-static double mf_left(double x, double b, double c)
+static memberships_t evaluate_memberships(const fuzzy_inputs_t *in)
 {
-    if (x <= b) 
-        return (1);
-    if (x >= c) return (0);
-        return ((c - x) / (c - b));
+    memberships_t m = {0};
+
+    m.mpos_low  = mf_left(in->mahalanobis_pos, MAHA_LOW_B, MAHA_MED_B);
+    m.mpos_high = mf_right(in->mahalanobis_pos, MAHA_HIGH_A, MAHA_HIGH_B);
+
+    m.mvel_low  = mf_left(in->mahalanobis_vel, MAHA_LOW_B, MAHA_MED_B);
+    m.mvel_high = mf_right(in->mahalanobis_vel, MAHA_HIGH_A, MAHA_HIGH_B);
+
+    m.ct_high = mf_right(in->cov_trace, TRACE_HIGH_A, TRACE_HIGH_B);
+
+    m.acc_high = mf_right(in->accel_norm, ACC_HIGH_A, ACC_HIGH_B);
+
+    return m;
 }
 
-// right-shoulder: 0 up to a, then rises to 1 at b
-static double mf_right(double x, double a, double b)
+/* ------------------------- Rule base application ------------------------ */
+/* Based on fuzzy rules, Output strengths are returned in the arrays:
+ * R_dec_norm_inc[3], Q_dec_norm_inc[3], G_dec_norm_inc[3]
+ * Where index 0=dec,1=norm,2=inc
+ */
+static void apply_rulebase(const memberships_t *m,
+                    double R_out[3], double Q_out[3], double G_out[3])
 {
-    if (x <= a)
-        return (0);
-    if (x >= b)
-        return (0);
-    return
-        ((x - a) / (b - a));
+    /* init */
+    R_out[0] = R_out[1] = R_out[2] = 0.0;
+    Q_out[0] = Q_out[1] = Q_out[2] = 0.0;
+    G_out[0] = G_out[1] = G_out[2] = 0.0;
+
+    /* Rules (Mamdani-style) */
+
+    /* R_inc: if M_pos is High OR M_vel is High -> increase R */
+    R_out[2] = fmax(m->mpos_high, m->mvel_high);
+
+    /* Q_inc: if Cov_trace High AND M_pos High -> increase Q */
+    Q_out[2] = fmax(Q_out[2], fmin(m->ct_high, m->mpos_high));
+
+    /* Q_dec: if Cov_trace High AND M_pos Low -> decrease Q */
+    Q_out[0] = fmax(Q_out[0], fmin(m->ct_high, m->mpos_low));
+
+    /* Q_inc: if velocity error and acceleration are high -> increase Q */
+    Q_out[2] = fmax(Q_out[2], fmin(m->mvel_high, m->acc_high));
+
+    /* G_dec: if both position and velocity mahalanobis low -> tighten gate */
+    G_out[0] = fmax(G_out[0], fmin(m->mpos_low, m->mvel_low));
+
+    /* R_inc & G_inc: if both pos and vel high -> increase R and loosen gate */
+    R_out[2] = fmax(R_out[2], fmin(m->mpos_high, m->mvel_high));
+    G_out[2] = fmax(G_out[2], fmin(m->mpos_high, m->mvel_high));
+
+    // Baseline: Fill 'normal' as 1 - max(inc,dec), clipped to [0,1].
+    R_out[1] = clamp_d(1.0 - fmax(R_out[2], R_out[0]), 0.0, 1.0);
+    Q_out[1] = clamp_d(1.0 - fmax(Q_out[2], Q_out[0]), 0.0, 1.0);
+    G_out[1] = clamp_d(1.0 - fmax(G_out[2], G_out[0]), 0.0, 1.0);
+
+    /* Small thresholding: discard tiny Q_inc values to avoid noise */
+    if (Q_out[2] < Q_INC_THRESHOLD)
+        Q_out[2] = 0.0;
 }
 
-// clamp helper
-static double clamp(double x, double lo, double hi)
+static void defuzzify_outputs(fuzzy_outputs_t *raw_out,
+            const double R_out[3], const double Q_out[3], const double G_out[3])
 {
-    if (x < lo)
-        return (lo);
-    if (x > hi) return (hi);
-    return (x);
+    raw_out->scale_R_gps = defuzzify_generic(R_out[0], R_out[1], R_out[2],
+                                             R_TARGET_DEC, R_TARGET_NORM, R_TARGET_INC);
+
+    raw_out->scale_Q = defuzzify_generic(Q_out[0], Q_out[1], Q_out[2],
+                                         Q_TARGET_DEC, Q_TARGET_NORM, Q_TARGET_INC);
+
+    raw_out->scale_gate = defuzzify_generic(G_out[0], G_out[1], G_out[2],
+                                            G_TARGET_DEC, G_TARGET_NORM, G_TARGET_INC);
 }
 
-// Initialize fuzzy params (copy defaults if NULL)
+static void smooth_and_clamp_outputs(const fuzzy_outputs_t *raw, fuzzy_outputs_t *out)
+{
+    /* Adaptive alpha for Q: we react slightly faster to Q increases.
+     * Compute a simple heuristic alpha_Q (smaller alpha -> faster response)
+     * Here we base it on how far raw->scale_Q is from last_out.scale_Q.
+     */
+    double base_alpha;
+    double alpha_R;
+    double alpha_G;
+    double alpha_Q;
+
+    alpha_Q = alpha_G = alpha_R = base_alpha = Fparams.smoothing_alpha;
+
+    //If Q raw is larger than last, allow slightly faster adaptation
+    if (raw->scale_Q > last_out.scale_Q)   // reduce alpha to respond faster
+        alpha_Q = clamp_d(base_alpha - 0.25, 0.25, base_alpha); 
+
+    out->scale_R_gps = smooth_value(last_out.scale_R_gps, raw->scale_R_gps, alpha_R);
+    out->scale_Q     = smooth_value(last_out.scale_Q, raw->scale_Q, alpha_Q);
+    out->scale_gate  = smooth_value(last_out.scale_gate, raw->scale_gate, alpha_G);
+
+    /* clamp to user-specified ranges */
+    out->scale_R_gps = clamp_d(out->scale_R_gps, Fparams.min_scale_R, Fparams.max_scale_R);
+    out->scale_Q     = clamp_d(out->scale_Q, Fparams.min_scale_Q, Fparams.max_scale_Q);
+    out->scale_gate  = clamp_d(out->scale_gate, Fparams.min_scale_gate, Fparams.max_scale_gate);
+
+    last_out = *out;
+}
+
+/* ------------------------ Public API functions --------------------------- */
+
 void fuzzy_init(const fuzzy_params_t *params)
 {
     if (params)
     {
-        Fparams = *params;   // sanitize 
-        Fparams.min_scale_R = clamp(Fparams.min_scale_R, 0.1, 10.0);
-        Fparams.max_scale_R = clamp(Fparams.max_scale_R, Fparams.min_scale_R, 10.0);
-        Fparams.min_scale_Q = clamp(Fparams.min_scale_Q, 0.1, 10.0);
-        Fparams.max_scale_Q = clamp(Fparams.max_scale_Q, Fparams.min_scale_Q, 10.0);
-        Fparams.min_scale_gate = clamp(Fparams.min_scale_gate, 0.1, 5.0);
-        Fparams.max_scale_gate = clamp(Fparams.max_scale_gate, Fparams.min_scale_gate, 5.0);
-        Fparams.smoothing_alpha = clamp(Fparams.smoothing_alpha, 0.0, 0.99);
+        Fparams = *params;
+        fuzz_params_sanitize(&Fparams);
     }
     else
         Fparams = default_params;
 
-    // initialize last outputs to neutral
     last_out.scale_R_gps = 1.0;
     last_out.scale_Q = 1.0;
     last_out.scale_gate = 1.0;
 }
 
-// Map linguistic label -> numeric scale (per output).
-// three levels: decrease / normal / increase.
-static void map_R_scale(double dec_strength, double nor_strength, double inc_strength, double *out_scale)
-{
-    // numeric targets for each label
-    const double dec_val = 0.75;
-    const double nor_val = 1.0;
-    const double inc_val = 1.5;
-    double sum = dec_strength + nor_strength + inc_strength;
-    if (sum <= 0.0)
-    {
-        *out_scale = 1.0;
-        return;
-    }
-    *out_scale = (dec_strength*dec_val + nor_strength*nor_val + inc_strength*inc_val) / sum;
-}
-
-// For Q scaling - slightly different numeric targets
-
-static void map_Q_scale(double Q_dec, double Q_norm, double Q_inc, double *q_scale)
-{
-    const double dec_val = 0.75;
-    const double nor_val = 1.0;
-    const double inc_val = 1.45;
-
-    double sum = Q_dec + Q_norm + Q_inc;
-    if (sum <= 0.0)
-        *q_scale = 1.0;
-    else
-        *q_scale = (Q_dec*dec_val + Q_norm*nor_val + Q_inc*inc_val) / sum;
-}
-
-// For gate scaling
-static void map_gate_scale(double dec_strength, double nor_strength, double inc_strength, double *out_scale)
-{
-    const double dec_val = 0.9; // tighten
-    const double nor_val = 1.0;
-    const double inc_val = 1.2; // loosen
-    double sum = dec_strength + nor_strength + inc_strength;
-
-    if (sum <= 0.0)
-    {
-        *out_scale = 1.0;
-        return;
-    }
-    *out_scale = (dec_strength*dec_val + nor_strength*nor_val + inc_strength*inc_val) / sum;
-}
-
-// Main update function
 void fuzzy_update(const fuzzy_inputs_t *in, fuzzy_outputs_t *out)
 {
-    // Input membership breakpoints - tuned conservative defaults
-    // Mahalanobis (3 DOF threshold ~16.27)
-    // Input membership breakpoints - tuned conservative defaults
-    const double m_low_b  = 3.0;
-    const double m_med_b  = 8.0;
-    const double m_high_a = 6.0;
-    const double m_high_b = 16.3;   // <- roughly 3σ
+    if (!in || !out)
+        return;
 
-    // Covariance trace - conservative numbers
-    const double ct_high_a = 15.0;
-    const double ct_high_b = 60.0;
+    memberships_t m;
+    fuzzy_outputs_t raw;
 
-    const double acc_high_a = 0.6;
-    const double acc_high_b = 2.5; // Accel norm (m/s^2)
+    double R_out[3];
+    double Q_out[3];
+    double G_out[3];
 
-    // Evaluate memberships (0..1)
-    double mpos_low = mf_left(in->mahalanobis_pos, m_low_b, m_med_b);
-    double mpos_high = mf_right(in->mahalanobis_pos, m_high_a, m_high_b);
+    m = evaluate_memberships(in);
+    apply_rulebase(&m, R_out, Q_out, G_out);
+    defuzzify_outputs(&raw, R_out, Q_out, G_out);
+    smooth_and_clamp_outputs(&raw, out);
+}
 
-    double mvel_low = mf_left(in->mahalanobis_vel, m_low_b, m_med_b);
-    double mvel_high = mf_right(in->mahalanobis_vel, m_high_a, m_high_b);
-
-    double ct_high = mf_right(in->cov_trace, ct_high_a, ct_high_b);
-    double acc_high = mf_right(in->accel_norm, acc_high_a, acc_high_b);
-
-    // RULES. Each rule produces strengths for outputs.
-    // compute contributions for each linguistic label (dec/norm/inc) per output.
-    double R_dec = 0.0, R_norm = 0.0, R_inc = 0.0;
-    double Q_dec = 0.0, Q_norm = 0.0, Q_inc = 0.0;
-    double G_dec = 0.0, G_norm = 0.0, G_inc = 0.0;
-
-    // Rule set (Mamdani-style, combine antecedent via min())
-
-    // R1: if M_pos is High -> R increase
-    R_inc = fmax(R_inc, mpos_high);
-
-    // R2: if M_vel is High -> R increase 
-    R_inc = fmax(R_inc, mvel_high);
-
-    // R3: if Cov_trace High AND M_pos High -> Q increase
-    Q_inc = fmax(Q_inc, fmin(ct_high, mpos_high));
-
-    // R4: if Cov_trace High AND M_pos Low -> Q decrease (overconfident but trace high)
-    Q_dec = fmax(Q_dec, fmin(ct_high, mpos_low));
-
-    // R5: if both velocity error and acceleration are high -> Q increase
-    Q_inc = fmax(Q_inc, fmin(mvel_high, acc_high));
-
-    // R6: if M_pos Low AND M_vel Low -> tighten gate (decrease)
-    G_dec = fmax(G_dec, fmin(mpos_low, mvel_low));
-
-    // R7: if both pos and vel high -> loosen gate and increase R
-    {
-        double strength = fmin(mpos_high, mvel_high);
-        G_inc = fmax(G_inc, strength);
-        R_inc = fmax(R_inc, strength);
-    }
-
-    // R8: baseline - if none triggered, prefer normal
-    {
-        // "normal" filler strength can be 1 - max(inc,dec) clipped
-        double maxR = fmax(R_inc, R_dec);
-        double maxQ = fmax(Q_inc, Q_dec);
-        double maxG = fmax(G_inc, G_dec);
-
-        R_norm = fmax(R_norm, clamp(1.0 - maxR, 0.0, 1.0));
-        Q_norm = fmax(Q_norm, clamp(1.0 - maxQ, 0.0, 1.0));
-        G_norm = fmax(G_norm, clamp(1.0 - maxG, 0.0, 1.0));
-    }
-
-    if (Q_inc < 0.25)
-            Q_inc = 0.0;
-
-    // Map linguistic strengths to numeric scales
-    double r_scale;
-    double q_scale;
-    double g_scale;
-
-    map_R_scale(R_dec, R_norm, R_inc, &r_scale);
-    map_Q_scale(Q_dec, Q_norm, Q_inc, &q_scale);
-    map_gate_scale(G_dec, G_norm, G_inc, &g_scale);
-
-    // Clamp to allowed ranges
-    r_scale = clamp(r_scale, Fparams.min_scale_R, Fparams.max_scale_R);
-    q_scale = clamp(q_scale, Fparams.min_scale_Q, Fparams.max_scale_Q);
-    g_scale = clamp(g_scale, Fparams.min_scale_gate, Fparams.max_scale_gate);
-
-    // Adaptive alpha for Q: reacts faster when Q_inc is strong
-    double alpha_Q = Fparams.smoothing_alpha - 0.4 * Q_inc;
-    alpha_Q = clamp(alpha_Q, 0.6, Fparams.smoothing_alpha);
-
-
-    // Smooth outputs to avoid flipping
-    out->scale_R_gps    = Fparams.smoothing_alpha * last_out.scale_R_gps + (1.0 - Fparams.smoothing_alpha) * r_scale;
-    out->scale_Q        = alpha_Q * last_out.scale_Q + (1.0 - alpha_Q) * q_scale;
-    out->scale_gate     = Fparams.smoothing_alpha * last_out.scale_gate + (1.0 - Fparams.smoothing_alpha) * g_scale;
-    last_out = *out;    // store last
+void fuzzy_get_last_outputs(fuzzy_outputs_t *out)
+{
+    if (!out)
+        return;
+    *out = last_out;
 }

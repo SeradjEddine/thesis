@@ -13,15 +13,18 @@ TARGET := $(BUILD_DIR)/$(NAME)
 
 # ---- Source files ---------------------------------------------------------- #
 SRCS := consumer.c \
+		consumer_utils.c \
         ekf.c \
+		ekf_utils.c \
         fuzzy_supervisor.c \
+		fuzzy_supervisor_utils.c \
         logger.c \
         main.c \
         producer.c \
         ringbuffer.c \
         sensor_reader.c \
-        multi_fuse.c
-
+        multi_fuse_utils.c \
+	multi_fuse.c
 # Map sources to object files in build/
 OBJS := $(addprefix $(BUILD_DIR)/, $(SRCS:.c=.o))
 

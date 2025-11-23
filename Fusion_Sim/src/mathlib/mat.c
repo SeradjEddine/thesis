@@ -30,6 +30,14 @@ void mat_transpose(int r, int c, const double *A, double *AT)
     }
 }
 
+/* Multiply (3x3)*(3x1) -> out (3) */
+void mat3_vec(const double *A, const double *v, double *out)
+{
+    out[0] = A[0]*v[0] + A[1]*v[1] + A[2]*v[2];
+    out[1] = A[3]*v[0] + A[4]*v[1] + A[5]*v[2];
+    out[2] = A[6]*v[0] + A[7]*v[1] + A[8]*v[2];
+}
+
 /* Multiply rA×cA matrix A with cA×cB matrix B, result rA×cB matrix C */
 void mat_mult(int rA, int cA, int cB, const double *A, const double *B, double *C)
 {
@@ -124,6 +132,25 @@ int mat_inverse_3x3(const double *A, double *Ainv)
 
     return 0;
 }
+
+int safe_mat_inv_3x3(const double A[9], double Ainv[9])
+{
+    double tmp[9];
+    for (int i = 0; i < 9; ++i) tmp[i] = A[i];
+
+    if (mat_inverse_3x3(tmp, Ainv) == 0) {
+        return 0;
+    }
+
+    /* fallback to diagonal inverse if inverse failed */
+    for (int i = 0; i < 9; ++i) Ainv[i] = 0.0;
+    if (A[0] > 1e-300) Ainv[0] = 1.0 / A[0];
+    if (A[4] > 1e-300) Ainv[4] = 1.0 / A[4];
+    if (A[8] > 1e-300) Ainv[8] = 1.0 / A[8];
+    /* If all failed consider it an error (still return nonzero) */
+    return -1;
+}
+
 
 // Row-major layout: A[r*c]
 

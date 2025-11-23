@@ -1,100 +1,58 @@
-#include "../include/fuzzy_supervisor.h"
 #include "../include/consumer.h"
-#include "../include/ekf.h"
-#include "../include/logger.h"
-#include "../include/sensors.h"
-#include "../src/mathlib/mathlib.h"
 
-#include <stdio.h>
-#include <unistd.h>
-#include <string.h>
-#include <time.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <string.h>
-#include <errno.h>
-
-#define PATH_MAX 100
-
-// Default GPS measurement noise (standard deviation)
-static const double GPS_POS_STD = 1.0; // meters
-static const double GPS_VEL_STD = 0.2; // m/s
-
-unsigned int interval_ms = 10;
-struct timespec ts;
-
-// Create all parent directories recursively
-static void create_directory_recursive(const char *path)
-{
-    char tmp[PATH_MAX];
-    snprintf(tmp, sizeof(tmp), "%s", path); 
-
-    for (char *p = tmp + 1; *p; p++)
-    {
-        if (*p == '/')
-        {
-            *p = '\0';
-            mkdir(tmp, 0777);  // ignore EEXIST
-            *p = '/';
-        }
-    }
-    mkdir(tmp, 0777);  // create final directory
-}
 void *consumer_thread(void *arg)
 {
     struct consumer_args *cargs = (struct consumer_args *)arg;
+
     struct ekf_state state;
     double P[P_DIM];
 
     double maha_pos = 0.0;
     double maha_vel = 0.0;
-    double last_time;
-    double dt;
+    double last_time = 0.0;
     size_t processed = 0;
 
-    /* ==========================================
-       🔸 1. Wait for first IMU and GPS samples
-       ========================================== */
-    struct imu_sample first_imu;
-    struct gps_sample first_gps;
+    struct fused_imu first_fused_imu;
+    struct fused_gps first_fused_gps;
 
     while (rb_is_empty(cargs->imu_rb) || rb_is_empty(cargs->gps_rb))
-        usleep(100);
+        usleep(10); // waits until both have at least one element 
 
-    rb_peek(cargs->imu_rb, &first_imu);
-    rb_peek(cargs->gps_rb, &first_gps);
-
-    /* ==========================================
-       🔸 2. Initialize ENU reference and EKF state
-       ========================================== */
-    // Initialize GPS reference for ENU conversion
-    ekf_init_gps_ref(first_gps.lat, first_gps.lon, first_gps.alt);
-
-    // Convert GPS position to ENU for initial position
-    double pos0[3];
-    latlon_to_enu(first_gps.lat, first_gps.lon, first_gps.alt, pos0);
+    if (rb_peek(cargs->imu_rb, &first_fused_imu) != 0)
+        return (fprintf(stderr, "[consumer] error: failed to peek first IMU fused entry\n"), NULL);
     
-    // Convert NED velocities (vn, ve, vu) to ENU
-    double vel0[3];
-    vel0[0] = first_gps.ve; // East → x
-    vel0[1] = first_gps.vn; // North → y
-    vel0[2] = first_gps.vu; // Up → z
+    if (rb_peek(cargs->gps_rb, &first_fused_gps) != 0)
+        return (fprintf(stderr, "[consumer] error: failed to peek first GPS fused entry\n"), NULL);
 
-    // Initialize EKF with proper starting state
-    ekf_init(&state, P, first_imu.t, pos0, vel0);
+    double pos0[3];  // Convert first GPS to ENU-based initial position and velocity for EKF init 
+    latlon_to_enu(first_fused_gps.lat, first_fused_gps.lon, first_fused_gps.alt, pos0);
+
+    double vel0[3];
+    vel0[0] = first_fused_gps.ve;   // east
+    vel0[1] = first_fused_gps.vn;  //north
+    vel0[2] = first_fused_gps.vu; // up
+
+    ekf_init(&state, P, first_fused_imu.t, pos0, vel0); //Init EKF with first samples (pos/vel)
     last_time = state.t;
 
-    printf("EKF initialized at t=%.3f ENU pos=[%.2f %.2f %.2f] vel=[%.2f %.2f %.2f]\n",
-           first_imu.t, pos0[0], pos0[1], pos0[2], vel0[0], vel0[1], vel0[2]);
+    printf("[consumer] EKF initialized t=%.6f pos=[%.3f, %.3f, %.3f] vel=[%.3f, %.3f, %.3f]\n",
+           state.t, pos0[0], pos0[1], pos0[2], vel0[0], vel0[1], vel0[2]);
 
-    /* ==========================================
-       🔸 3. Prepare log file outputs
-       ========================================== */
+    // defualt fuzzy supervisor Initialization
+    fuzzy_params_t fparams = {
+        .min_scale_R = 0.6,
+        .max_scale_R = 3.0,
+        .min_scale_Q = 0.7,
+        .max_scale_Q = 2.0,
+        .min_scale_gate = 0.85,
+        .max_scale_gate = 1.5,
+        .smoothing_alpha = 0.85 };
+
+    fuzzy_init(&fparams);
+
+    // Prepare logs 
+    create_directory_recursive(cargs->output_dir);       
     char imu_path[PATH_MAX], gps_path[PATH_MAX], fuzzy_path[PATH_MAX];
-    create_directory_recursive(cargs->output_dir);
-
-    
-
     snprintf(imu_path, sizeof(imu_path), "%s/imu_prop.csv", cargs->output_dir);
     snprintf(gps_path, sizeof(gps_path), "%s/gps_updates.csv", cargs->output_dir);
     snprintf(fuzzy_path, sizeof(fuzzy_path), "%s/fuzzy.csv", cargs->output_dir);
@@ -103,133 +61,125 @@ void *consumer_thread(void *arg)
     open_gps_log(gps_path);
     open_fuzzy_log(fuzzy_path);
 
-    /* ==========================================
-       🔸 4. Initialize fuzzy supervisor
-       ========================================== */
-    fuzzy_params_t fparams = {
-        .min_scale_R = 0.6,
-        .max_scale_R = 3.0,
-        .min_scale_Q = 0.7,
-        .max_scale_Q = 2.0,
-        .min_scale_gate = 0.85,
-        .max_scale_gate = 1.5,
-        .smoothing_alpha = 0.85
-    };
-    fuzzy_init(&fparams);
 
-    /* ==========================================
-       🔸 5. Main consumer loop
-       ========================================== */
+                // Main loop: processes fused_imu items as IMU propagation and fused_gps items as GPS updates.
     while (1)
     {
-        struct imu_sample imu;
+        struct fused_imu fused_imu_item;
+        struct fused_gps fused_gps_item;
 
-        /* --- IMU Propagation Step --- */
-        if (rb_pop(cargs->imu_rb, &imu) == 0)
+        if (rb_pop(cargs->imu_rb, &fused_imu_item) == 0)
         {
-            dt = imu.t - last_time;
-            if (dt <= 0.0) dt = 0.01;
-            ekf_propagate(&state, P, &imu, dt);
+            struct imu_sample imu_in;
+            fused_imu_to_imu_sample(&fused_imu_item, &imu_in);
+
+            double dt = imu_in.t - last_time;
+            if (dt <= 0.0)
+                dt = 0.01; // defensive fallback
+
+            ekf_propagate(&state, P, &imu_in, dt);
             last_time = state.t;
+
             log_state(&state, P);
             processed++;
-            continue;
+            continue; // go back and pop more IMU if available
         }
 
-        /* --- GPS Update Step --- */
-        struct gps_sample g;
-        if (rb_pop(cargs->gps_rb, &g) == 0)
+        if (rb_pop(cargs->gps_rb, &fused_gps_item) == 0)
         {
-            /* Propagate IMU samples up to GPS timestamp */
-            struct imu_sample imu2;
             while (!rb_is_empty(cargs->imu_rb))
             {
-                rb_peek(cargs->imu_rb, &imu2);
-                if (imu2.t <= g.t)
+                struct fused_imu lookahead;
+                if (rb_peek(cargs->imu_rb, &lookahead) != 0)
+                    break; /* peek fail -> exit loop */
+
+                if (lookahead.t <= fused_gps_item.t)
                 {
-                    rb_pop(cargs->imu_rb, &imu2);
-                    double dt2 = imu2.t - last_time;
-                    if (dt2 <= 0.0) dt2 = 0.01;
-                    ekf_propagate(&state, P, &imu2, dt2);
-                    last_time = state.t;
-                    log_state(&state, P);
+                    if (rb_pop(cargs->imu_rb, &lookahead) == 0)
+                    {
+                        struct imu_sample imu_in2;
+                        fused_imu_to_imu_sample(&lookahead, &imu_in2);
+                        double dt2 = imu_in2.t - last_time;
+                        if (dt2 <= 0.0) dt2 = 0.01;
+                        ekf_propagate(&state, P, &imu_in2, dt2);
+                        last_time = state.t;
+                        log_state(&state, P);
+                        processed++;
+                    }
+                    else
+                        break;
                 }
-                else break;
+                else
+                    break;
             }
 
-            /* --- Convert GPS to ENU --- */
-            double pos_enu[3];
-            latlon_to_enu(g.lat, g.lon, g.alt, pos_enu);
-            double vel_enu[3] = { g.ve, g.vn, g.vu };
+            double pos_enu[3];  // Convert fused_gps to measurement and build R matrices
+            latlon_to_enu(fused_gps_item.lat, fused_gps_item.lon, fused_gps_item.alt, pos_enu);
 
-            /* --- Build measurement noise matrices --- */
-            double Rpos[9] = {
-                GPS_POS_STD*GPS_POS_STD, 0, 0,
-                0, GPS_POS_STD*GPS_POS_STD, 0,
-                0, 0, GPS_POS_STD*GPS_POS_STD
-            };
+            double vel_enu[3];
+            vel_enu[0] = fused_gps_item.ve;   // east -> x
+            vel_enu[1] = fused_gps_item.vn;  // north -> y
+            vel_enu[2] = fused_gps_item.vu; // up -> z
 
-            double Rvel[9] = {
-                GPS_VEL_STD*GPS_VEL_STD, 0, 0,
-                0, GPS_VEL_STD*GPS_VEL_STD, 0,
-                0, 0, GPS_VEL_STD*GPS_VEL_STD
-            };
+            double Rpos[9];
+            double Rvel[9];
 
-            /* --- Fuzzy Supervisor Update --- */
+            if ((fused_gps_item.P_pos[0] > 1e-12) || (fused_gps_item.P_pos[4] > 1e-12) || (fused_gps_item.P_pos[8] > 1e-12) )
+                fused_pos_to_R(fused_gps_item.P_pos, Rpos);
+            else
+                build_default_Rpos(Rpos);
+
+            if ((fused_gps_item.P_vel[0] > 1e-12) || (fused_gps_item.P_vel[4] > 1e-12) || (fused_gps_item.P_vel[8] > 1e-12) )
+                fused_vel_to_R(fused_gps_item.P_vel, Rvel);
+            else
+                build_default_Rvel(Rvel);
+
             fuzzy_inputs_t fin;
+            fuzzy_outputs_t fout;
+
             fin.mahalanobis_pos = maha_pos;
             fin.mahalanobis_vel = maha_vel;
             fin.cov_trace = P[IDX(0,0)] + P[IDX(1,1)] + P[IDX(2,2)];
-            fin.accel_norm = 0.0;
+            fin.accel_norm = 0.0; // accel_norm could be computed from last IMU. zero is placeholder for now
 
-            fuzzy_outputs_t fout;
             fuzzy_update(&fin, &fout);
 
-            double Rpos_scaled[9], Rvel_scaled[9];
+            /* Scale R matrices according to fuzzy outputs */
+
+            double Rpos_scaled[9];
+            double Rvel_scaled[9];
+        
             mat_scale(3, 3, fout.scale_R_gps, Rpos, Rpos_scaled);
             mat_scale(3, 3, fout.scale_R_gps, Rvel, Rvel_scaled);
 
-            /* --- EKF GPS Update --- */
-            int accepted_pos = 0, accepted_vel = 0;
-            ekf_update_gps(&state, P, pos_enu, vel_enu,
-                           Rpos_scaled, Rvel_scaled,
-                           &maha_pos, &accepted_pos,
-                           &maha_vel, &accepted_vel);
+                                        /* EKF GPS update */
+            int accepted_pos = 0;
+            int accepted_vel = 0;
+            ekf_update_gps(&state, P, pos_enu, vel_enu, Rpos_scaled, Rvel_scaled,
+                           &maha_pos, &accepted_pos, &maha_vel, &accepted_vel);
 
-            /* --- Logging --- */
-            double innov_pos[3] = {
-                pos_enu[0] - state.p[0],
-                pos_enu[1] - state.p[1],
-                pos_enu[2] - state.p[2]
-            };
-            double innov_vel[3] = {
-                vel_enu[0] - state.v[0],
-                vel_enu[1] - state.v[1],
-                vel_enu[2] - state.v[2]
-            };
+            // Compute innovation values for logging (measurement - (state))
+            double innov_pos[3] = { pos_enu[0] - state.p[0], pos_enu[1] - state.p[1], pos_enu[2] - state.p[2] };
+            double innov_vel[3] = { vel_enu[0] - state.v[0], vel_enu[1] - state.v[1], vel_enu[2] - state.v[2] };
 
-            log_gps_update(g.t, pos_enu, innov_pos, maha_pos, accepted_pos,
+            
+            log_gps_update(fused_gps_item.t, pos_enu, innov_pos, maha_pos, accepted_pos,
                                          vel_enu, innov_vel, maha_vel, accepted_vel);
-            log_fuzzy(g.t, fout.scale_R_gps, fout.scale_Q, fout.scale_gate);
+            log_fuzzy(fused_gps_item.t, fout.scale_R_gps, fout.scale_Q, fout.scale_gate);
+
             continue;
         }
 
-        /* --- Exit condition --- */
-        if (*(cargs->producers_done) >= 2 &&
-            rb_is_empty(cargs->imu_rb) &&
-            rb_is_empty(cargs->gps_rb))
+        // Termination condition: only when both producers finished and both buffers empty
+        if (*(cargs->producers_done) >= 2 && rb_is_empty(cargs->imu_rb) && rb_is_empty(cargs->gps_rb))
             break;
-
-        usleep(100);
+        usleep(1000);  // Sleep briefly when nothing available to avoid busy loop
     }
 
-    /* ==========================================
-       🔸 6. Cleanup
-       ========================================== */
     close_state_log();
     close_gps_log();
     close_fuzzy_log();
 
-    printf("Consumer finished, processed %zu IMU samples\n", processed);
+    printf("[consumer] finished, processed %zu IMU steps\n", processed);
     return NULL;
 }

@@ -2,6 +2,14 @@
     "files.associations": {
         "ringbuffer.h": "c",
         "multi_fuse.h": "c",
-        "producer.h": "c"
+        "producer.h": "c",
+        "mathlib.h": "c",
+        "sensors.h": "c",
+        "logger.h": "c",
+        "consumer.h": "c",
+        "stdlib.h": "c",
+        "unistd.h": "c",
+        "fuzzy_supervisor.h": "c",
+        "ekf.h": "c"
     }
 }

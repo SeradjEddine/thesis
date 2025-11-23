@@ -1,8 +1,4 @@
 #include "../include/producer.h"
-#include <unistd.h>
-#include <string.h>
-#include <stdio.h>
-#include <time.h>
 
 void *producer_thread(void *arg)
 {

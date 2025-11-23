@@ -1,18 +1,27 @@
 #ifndef MULTI_FUSE_H
 #define MULTI_FUSE_H
 
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include <stdio.h>
+
+#include "../src/mathlib/mathlib.h"
 #include "sensors.h"
 
+#define MAX_SENSORS 32
+#define MAX_DT_IMU 0.002
+#define MAX_DT_GPS 0.01
+#define K_ROBUST 3.0
 
 struct fused_imu
 {
     double t;
     double ax, ay, az;
-    double gx, gy, gz;
+    double wx, wy, wz;
     double P_acc[9];
     double P_gyro[9];
     int n_used;
-    struct fused_imu *next;
 };
 
 struct fused_gps
@@ -23,21 +32,15 @@ struct fused_gps
     double P_pos[9];
     double P_vel[9];
     int n_used;
-    struct fused_gps *next;
 };
 
-struct fused_imu *fuse_imus(struct imu_node **imu_heads, int N, double max_dt,
-                            const double (*sensor_R_acc_diag)[3],
-                            const double (*sensor_R_gyro_diag)[3]);
+void component_median(double vals[][3], int n, double out[3]);
+void component_mad(double vals[][3], int n, const double med[3], double out[3]);
+void accumulate_weighted(const double *W, const double *v, double *sumW, double *sumWv);
+void build_diag3(const double diag[3], double out[9]);
+double compute_alpha(const double z[3], const double med[3], const double mad[3], double k);
 
-struct fused_gps *fuse_gps(struct gps_node **gps_heads, int N, double max_dt,
-                           const double (*sensor_R_pos_diag)[3],
-                           const double (*sensor_R_vel_diag)[3]);
-
-struct fused_gps *append_fused_gps(struct fused_gps **head, struct fused_gps **tail, struct fused_gps *node);
-
-void free_fused_imu_list(struct fused_imu *h);
-
-void free_fused_gps_list(struct fused_gps *h);
+int fuse_imus(struct imu_sample **imu_arrays, int N, int samples_per_sensor, struct fused_imu *out);
+int fuse_gps(struct gps_sample **gps_arrays, int N, int samples_per_sensor, struct fused_gps *out);
 
 #endif

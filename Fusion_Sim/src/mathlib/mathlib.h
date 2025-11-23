@@ -23,7 +23,7 @@ void mat_transpose(int r, int c, const double *A, double *AT);
 /* Multiplications */
 void mat_mult(int rA, int cA, int cB, const double *A, const double *B, double *C);
 void mat_vec_mult(int r, int c, const double *A, const double *v, double *out);
-
+void mat3_vec(const double *A, const double *v, double *out);
 
 // Scale matrix A (r x c) by s into out (can be same pointer as A)
 void mat_scale(int r, int c, double s, const double *A, double *out);
@@ -39,7 +39,7 @@ void mat_sub(int r, int c, const double *A, const double *B, double *C);
 /* Inverses (specialized) */
 int mat_inverse_2x2(const double *A, double *Ainv);
 int mat_inverse_3x3(const double *A, double *Ainv);
-
+int safe_mat_inv_3x3(const double A[9], double Ainv[9]);
 
 /* ===== Quaternion operations ===== */
 

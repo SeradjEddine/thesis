@@ -30,7 +30,7 @@ from typing import Tuple
 # ----------------------------------------------------------------------
 
 NOISE_SCALE = {
-    "gps": 0.25,
+    "gps": 0.250,
     "orientation": 1.0,
     "velocity": 1.0,
     "accel": 1.2,
@@ -226,4 +226,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
